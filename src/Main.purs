@@ -1,23 +1,27 @@
 module Klank.Dev where
 
 import Prelude
+import Color (rgba)
+import Control.Monad.Reader (Reader, runReader)
 import Data.DateTime.Instant (unInstant)
 import Data.Foldable (traverse_)
 import Data.Int (toNumber)
+import Data.List (List(..))
 import Data.Map (Map, insertWith)
 import Data.Map as M
 import Data.Maybe (Maybe(..), isJust, maybe)
 import Data.Newtype (unwrap, wrap)
 import Data.String (indexOf, Pattern(..))
-import Data.Typelevel.Num (D1)
+import Data.Typelevel.Num (D2)
 import Effect (Effect)
 import Effect.Now (now)
 import Effect.Ref as Ref
 import FRP.Behavior (Behavior, behavior)
-import FRP.Behavior.Audio (AudioUnit, gain', runInBrowser, sinOsc, speaker')
+import FRP.Behavior.Audio (AV(..), AudioParameter, AudioUnit, CanvasInfo, defaultExporter, runInBrowser_)
 import FRP.Event (Event, makeEvent, subscribe)
-import Graphics.Drawing (Point)
-import Type.Klank.Dev (Klank, klank)
+import Graphics.Drawing (Color, Point)
+import Graphics.Painting (Painting)
+import Type.Klank.Dev (Klank', klank)
 import Web.Event.EventTarget (EventListener, addEventListener, eventListener, removeEventListener)
 import Web.HTML (window)
 import Web.HTML.Navigator (userAgent)
@@ -31,13 +35,256 @@ import Web.TouchEvent.TouchList as TL
 import Web.UIEvent.MouseEvent (MouseEvent)
 import Web.UIEvent.MouseEvent as ME
 
-scene :: Number -> Behavior (AudioUnit D1)
-scene _ = pure (speaker' (gain' 0.2 (sinOsc 440.0)))
+type WAccumulator
+  = {}
 
-main :: Klank
+type RenderInfo
+  = { audioEnv :: AudioEnv
+    , visualEnv :: VideoEnv
+    , accumulator :: WAccumulator
+    }
+
+type Env
+  = { accumulator :: WAccumulator
+    , time :: Number
+    , interactions :: InteractionMap
+    }
+
+env :: Reader Env RenderInfo
+env =
+  pure
+    { audioEnv:
+        { backgrondInfo: \_ -> { note: Nt0, onset: 0.0 }
+        , synthInfo: \_ -> Nothing
+        , bellInfo: Nil
+        , fluteInfo: Nothing
+        , soloistInfo: { soloistEffect: 0.0 }
+        }
+    , visualEnv:
+        { backgroundInfo:
+            \_ ->
+              { currentTime: 0.0
+              , h: 0.0
+              , note: Nt0
+              , w: 0.0
+              , x: 0.0
+              , y: 0.0
+              }
+        , synthInfo:
+            \_ -> Nothing
+        , bellInfo: Nil
+        , fluteInfo:
+            \_ ->
+              { color: rgba 0 0 0 0.0
+              , h: 0.0
+              , w: 0.0
+              , x: 0.0
+              , y: 0.0
+              }
+        , soloistInfo: { color: rgba 0 0 0 0.0 }
+        }
+    , accumulator: {}
+    }
+
+audioScene :: AudioEnv -> AudioUnit D2
+audioScene _ = zero
+
+visualScene :: VideoEnv -> Painting
+visualScene _ = mempty
+
+scene :: Interactions -> WAccumulator -> CanvasInfo -> Number -> Behavior (AV D2 WAccumulator)
+scene inter acc ci time = go <$> interactionLog inter
+  where
+  go { interactions } =
+    AV
+      { audio: Just (audioScene audioEnv)
+      , visual:
+          Just
+            { painting: \_ -> visualScene visualEnv
+            , words: Nil
+            }
+      , accumulator
+      }
+    where
+    { audioEnv, visualEnv, accumulator } =
+      runReader env
+        { accumulator: acc
+        , interactions
+        , time
+        }
+
+main :: Klank' WAccumulator
 main =
   klank
-    { run = runInBrowser scene
+    { run = runInBrowser_ (scene <$> getInteractivity)
+    , accumulator = \res _ -> res {}
+    , exporter = defaultExporter
+    , webcamCache = \_ _ -> identity
+    }
+
+data BackgroundVoice
+  = V0
+  | V1
+  | V2
+  | V3
+  | V4
+  | V5
+  | V6
+  | V7
+
+data BackgroundNote
+  = Nt0 -- We're walking in the air, We're floating in the moonlit
+  | Nt1 -- sky. The people far below are
+  | Nt2 -- sleeping as we fly.
+  | Nt3 -- I'm holding very tight. I'm riding in the midnight 
+  | Nt4 -- blue. I'm finding I can fly so 
+  | Nt5 -- high above with you.
+  | Nt6 -- Children gaze open mouth
+  | Nt7 -- Taken by surprise
+  | Nt8 -- Nobody down below
+  | Nt9 -- believes their eyes.
+  | Nt10 -- We're walking in the air. We're dancing in the midnight
+  | Nt11 -- sky. And everyone who sees us
+  | Nt12 -- greets us as we fly.
+  | Nt13 -- [end]
+
+data SynthVoice
+  = Sv0
+  | Sv1
+  | Sv2
+  | Sv3
+  | Sv4
+  | Sv5
+  | Sv6
+  | Sv7
+
+data SynthNote
+  = Sn0 -- I'm holding very tight.
+  | Sn1 -- I'm riding in the midnight 
+  | Sn2 -- blue. I'm
+  | Sn3 -- finding I can fly so 
+  | Sn4 -- high above with
+  | Sn5 -- you.
+  | Sn6 -- Children gaze
+  | Sn7 -- open mouth
+  | Sn8 -- Taken by
+  | Sn9 -- surprise
+  | Sn10 -- Nobody
+  | Sn11 -- down below
+  | Sn12 -- believes
+  | Sn13 -- their
+  | Sn14 -- eyes.
+
+data BellNote
+  = Ln0
+  | Ln1
+  | Ln2
+  | Ln3
+  | Ln4
+  | Ln5
+  | Ln6
+  | Ln7
+  | Ln8
+  | Ln9
+
+data FluteNote
+  = Fn0
+  | Fn1
+  | Fn2
+  | Fn3
+  | Fn4
+  | Fn5
+  | Fn6
+  | Fn7
+  | Fn8
+  | Fn9
+  | Fn10
+  | Fn11
+  | Fn12
+  | Fn13
+  | Fn14
+  | Fn15
+  | Fn16
+  | Fn17
+  | Fn18
+  | Fn19
+  | Fn20
+  | Fn21
+  | Fn22
+  | Fn23
+
+type BackgroundNoteInfo
+  = { onset :: Number
+    , note :: BackgroundNote
+    }
+
+type SynthNoteInfo
+  = { intensity :: Number
+    , note :: SynthNote
+    }
+
+type BellNoteInfo
+  = { onset :: Number, note :: BellNote }
+
+type FluteNoteInfo
+  = { gain :: AudioParameter
+    , note :: FluteNote
+    }
+
+type SoloistNoteInfo
+  = { soloistEffect :: Number
+    }
+
+type AudioEnv
+  = { backgrondInfo :: BackgroundVoice -> BackgroundNoteInfo
+    , synthInfo :: SynthVoice -> Maybe SynthNoteInfo
+    , bellInfo :: List BellNoteInfo
+    , fluteInfo :: Maybe FluteNoteInfo
+    , soloistInfo :: SoloistNoteInfo
+    }
+
+type BackgroundVideoInfo
+  = { currentTime :: Number
+    , note :: BackgroundNote
+    , x :: Number
+    , y :: Number
+    , w :: Number
+    , h :: Number
+    }
+
+type SynthVideoInfo
+  = { color :: Color
+    , x :: Number
+    , y :: Number
+    , w :: Number
+    , h :: Number
+    }
+
+type BellVideoInfo
+  = { color :: Color
+    , x :: Number
+    , y :: Number
+    , r :: Number
+    }
+
+type FluteVideoInfo
+  = { color :: Color
+    , x :: Number
+    , y :: Number
+    , w :: Number
+    , h :: Number
+    }
+
+type SoloistVideoInfo
+  = { color :: Color
+    }
+
+type VideoEnv
+  = { backgroundInfo :: BackgroundVoice -> BackgroundVideoInfo
+    , synthInfo :: SynthVoice -> Maybe SynthVideoInfo
+    , bellInfo :: List BellVideoInfo
+    , fluteInfo :: FluteNote -> FluteVideoInfo
+    , soloistInfo :: SoloistVideoInfo
     }
 
 newtype Interactions
@@ -74,7 +321,7 @@ handleTE isEnd il te = do
 handleME :: Int -> Boolean -> Ref.Ref InteractionMap -> MouseEvent -> Effect Unit
 handleME i isEnd ref me = do
   tn <- map (unwrap <<< unInstant) now
-  void $ Ref.modify ((if isEnd then purge tn else identity) <<< insertWith (\e n -> e { pt = n.pt }) i { onset: tn, pt: if isEnd then Nothing else Just { x: toNumber $ ME.clientX me, y: toNumber $ ME.clientY me } }) ref
+  void $ Ref.modify (if isEnd then purge tn else identity <<< insertWith (\e n -> e { pt = n.pt }) i { onset: tn, pt: if isEnd then Nothing else Just { x: toNumber $ ME.clientX me, y: toNumber $ ME.clientY me } }) ref
 
 makeTouchListener :: Boolean -> Ref.Ref InteractionMap -> Effect EventListener
 makeTouchListener isEnd interactions =
