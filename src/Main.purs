@@ -4,6 +4,7 @@ import Prelude
 import Color (rgba)
 import Control.Comonad.Cofree (Cofree, deferCofree)
 import Control.Comonad.Cofree as Cf
+import Control.Monad.Reader (Reader, ask, runReader)
 import Control.Monad.Rec.Class (Step(..), tailRec)
 import Data.DateTime.Instant (unInstant)
 import Data.Either (Either(..))
@@ -64,7 +65,9 @@ secondVerseStarts = firstVerseStarts + sectionLen :: Number
 
 instrumentsFullyFadedIn = secondVerseStarts + (2.0 * measure) :: Number
 
-instrumentsFullyFadedOut = thirdVerseStarts + (2.0 * measure) :: Number
+instrumentsStartFadingOut = thirdVerseStarts - (2.0 * measure) :: Number
+
+fluteFullyFadedIn = thirdVerseStarts + (2.0 * measure) :: Number
 
 bridgeStarts = secondVerseStarts + sectionLen :: Number
 
@@ -86,8 +89,20 @@ bridgeStartPlus8 = bridgeStarts + 8.0 * measure :: Number
 
 thirdVerseStarts = bridgeStarts + sectionLen :: Number
 
+calcSlope :: Number -> Number -> Number -> Number -> Number -> Number
+calcSlope x0 y0 x1 y1 x =
+  if x1 == x0 || y1 == y0 then
+    y0
+  else
+    let
+      m = (y1 - y0) / (x1 - x0)
+
+      b = y0 - m * x0
+    in
+      m * x + b
+
 type WAccumulator
-  = { backgroundBeat :: BackgroundVoice -> Number
+  = { backgroundPlayhead :: BackgroundVoice -> Number
     , bells :: List BellAccumulatorInfo
     , bellsLoop :: CofreeList (Number -> Number)
     , prevClicks :: Set Int
@@ -287,13 +302,365 @@ normalPositions w h v =
       Bv6 -> { x: width, y: 2.0 * height, width, height }
       Bv7 -> { x: 2.0 * width, y: 2.0 * height, width, height }
 
-backgroundVideoCoords :: Number -> Number -> BackgroundVoice -> Number -> Rectangle
-backgroundVideoCoords w h v n
+positionsWithRoomForInstruments :: Number -> Number -> BackgroundVoice -> Rectangle
+positionsWithRoomForInstruments w h v =
+  let
+    instrw = w / 6.0
+
+    instrh = h / 6.0
+
+    width = w * 2.0 / 9.0
+
+    height = h * 2.0 / 9.0
+
+    instrwOver2 = w / 12.0
+
+    instrhOver2 = h / 12.0
+  in
+    case v of
+      Bv0 -> { x: 0.0, y: 0.0, width, height }
+      Bv1 -> { x: width + instrwOver2, y: 0.0, width, height }
+      Bv2 -> { x: 2.0 * width + instrwOver2, y: 0.0, width, height }
+      Bv3 -> { x: 0.0, y: height + instrhOver2, width, height }
+      Bv4 -> { x: 2.0 * width + instrwOver2, y: height + instrhOver2, width, height }
+      Bv5 -> { x: 0.0, y: 2.0 * height + instrhOver2, width, height }
+      Bv6 -> { x: width + instrwOver2, y: 2.0 * height + instrhOver2, width, height }
+      Bv7 -> { x: 2.0 * width + instrwOver2, y: 2.0 * height, width, height }
+
+positionsWithRoomForFlute :: Number -> Number -> BackgroundVoice -> Rectangle
+positionsWithRoomForFlute w h v =
+  let
+    instrw = w / 6.0
+
+    instrh = h / 6.0
+
+    width = w * 2.0 / 9.0
+
+    height = h * 2.0 / 9.0
+  in
+    case v of
+      Bv0 -> { x: instrw, y: instrh, width, height }
+      Bv1 -> { x: width + instrw, y: instrh, width, height }
+      Bv2 -> { x: 2.0 * width + instrw, y: instrh, width, height }
+      Bv3 -> { x: instrw, y: height + instrh, width, height }
+      Bv4 -> { x: 2.0 * width + instrw, y: height + instrh, width, height }
+      Bv5 -> { x: instrw, y: 2.0 * height + instrh, width, height }
+      Bv6 -> { x: width + instrw, y: 2.0 * height + instrh, width, height }
+      Bv7 -> { x: 2.0 * width + instrw, y: 2.0 * height + instrh, width, height }
+
+interpolateRectangles :: Number -> Number -> Number -> Rectangle -> Rectangle -> Rectangle
+interpolateRectangles n0 n1 t r0 r1 =
+  { x: calcSlope n0 r0.x n1 r1.x t
+  , y: calcSlope n0 r0.y n1 r1.y t
+  , width: calcSlope n0 r0.width n1 r1.width t
+  , height: calcSlope n0 r0.height n1 r1.height t
+  }
+
+backgroundVideoCoords :: Number -> Number -> Number -> BackgroundVoice -> Rectangle
+backgroundVideoCoords w h n v
   | n < secondVerseStarts = normalPositions w h v
-  | n < instrumentsFullyFadedIn = normalPositions w h v
-  | n < thirdVerseStarts = normalPositions w h v
-  | n < instrumentsFullyFadedOut = normalPositions w h v
-  | otherwise = normalPositions w h v
+  | n < instrumentsFullyFadedIn =
+    interpolateRectangles
+      secondVerseStarts
+      instrumentsFullyFadedIn
+      n
+      (normalPositions w h v)
+      (positionsWithRoomForInstruments w h v)
+  | n < instrumentsStartFadingOut = positionsWithRoomForInstruments w h v
+  | n < thirdVerseStarts =
+    interpolateRectangles
+      instrumentsStartFadingOut
+      thirdVerseStarts
+      n
+      (positionsWithRoomForInstruments w h v)
+      (normalPositions w h v)
+  | n < fluteFullyFadedIn =
+    interpolateRectangles
+      thirdVerseStarts
+      fluteFullyFadedIn
+      n
+      (normalPositions w h v)
+      (positionsWithRoomForFlute w h v)
+  | otherwise = positionsWithRoomForFlute w h v
+
+type SynthDims
+  = { oneSixthW :: Number
+    , oneSixthH :: Number
+    , twoNinthsW :: Number
+    , twoNinthsH :: Number
+    , oneThirdW :: Number
+    , oneThirdH :: Number
+    , sevenEighteenthsW :: Number
+    , sevenEighteenthsH :: Number
+    , elevenEighteenthsW :: Number
+    , elevenEighteenthsH :: Number
+    , twoThirdsW :: Number
+    , twoThirdsH :: Number
+    , sevenNinthsW :: Number
+    , sevenNinthsH :: Number
+    }
+
+synthDims :: Number -> Number -> SynthDims
+synthDims w h =
+  { oneSixthW: w / 6.0
+  , oneSixthH: h / 6.0
+  , twoNinthsW: 2.0 * w / 9.0
+  , twoNinthsH: 2.0 * h / 9.0
+  , oneThirdW: w / 3.0
+  , oneThirdH: h / 3.0
+  , sevenEighteenthsW: 7.0 * w / 18.0
+  , sevenEighteenthsH: 7.0 * h / 18.0
+  , elevenEighteenthsW: 11.0 * w / 18.0
+  , elevenEighteenthsH: 11.0 * h / 18.0
+  , twoThirdsW: 2.0 * w / 3.0
+  , twoThirdsH: 2.0 * h / 3.0
+  , sevenNinthsW: 7.0 * w / 9.0
+  , sevenNinthsH: 7.0 * h / 9.0
+  }
+
+type FluteDims
+  = { oneSixthW :: Number
+    , oneFourthW :: Number
+    , oneHalfW :: Number
+    , threeFourthsW :: Number
+    , oneSixthH :: Number
+    , fiveEighteenthsH :: Number
+    , sevenEighteenthsH :: Number
+    , nineEighteenthsH :: Number
+    , elevenEighteenthsH :: Number
+    , thirteenEighteenthsH :: Number
+    , fiveSixthsH :: Number
+    , fiveSixthsW :: Number
+    , h :: Number
+    , oneHalfH :: Number
+    , oneNinthH :: Number
+    , oneThirdH :: Number
+    , twoThirdsH :: Number
+    , w :: Number
+    }
+
+fluteDims :: Number -> Number -> FluteDims
+fluteDims w h =
+  { oneSixthW: w / 6.0
+  , oneFourthW: w / 4.0
+  , oneHalfW: w / 2.0
+  , threeFourthsW: 3.0 * w / 4.0
+  , oneSixthH: h / 6.0
+  , fiveEighteenthsH: 5.0 * h / 18.0
+  , sevenEighteenthsH: 7.0 * h / 18.0
+  , nineEighteenthsH: 9.0 * h / 18.0
+  , elevenEighteenthsH: 11.0 * h / 18.0
+  , thirteenEighteenthsH: 13.0 * h / 18.0
+  , fiveSixthsH: 5.0 * h / 6.0
+  , fiveSixthsW: 5.0 * w / 6.0
+  , h
+  , oneHalfH: h / 2.0
+  , oneNinthH: h / 9.0
+  , oneThirdH: h / 3.0
+  , twoThirdsH: 2.0 * h / 3.0
+  , w
+  }
+
+fluteDisappearPositions :: FluteNote -> Reader FluteDims Rectangle
+fluteDisappearPositions v = do
+  { oneSixthW
+  , oneFourthW
+  , oneHalfW
+  , threeFourthsW
+  , w
+  , oneSixthH
+  , fiveEighteenthsH
+  , oneThirdH
+  , sevenEighteenthsH
+  , oneHalfH
+  , nineEighteenthsH
+  , elevenEighteenthsH
+  , twoThirdsH
+  , thirteenEighteenthsH
+  , fiveSixthsH
+  , h
+  } <-
+    ask
+  pure
+    $ case v of
+        Fn0 -> mr 0.0 0.0 oneFourthW 0.0
+        Fn1 -> mr oneFourthW 0.0 oneFourthW 0.0
+        Fn2 -> mr oneHalfW 0.0 oneFourthW 0.0
+        Fn3 -> mr threeFourthsW 0.0 oneFourthW 0.0
+        Fn4 -> mr 0.0 0.0 0.0 oneSixthH
+        Fn5 -> mr 0.0 oneSixthH 0.0 oneSixthH
+        Fn6 -> mr 0.0 oneThirdH 0.0 oneSixthH
+        Fn7 -> mr 0.0 oneHalfH 0.0 oneSixthH
+        Fn8 -> mr 0.0 twoThirdsH 0.0 oneSixthH
+        Fn9 -> mr 0.0 fiveSixthsH 0.0 oneSixthH
+        Fn10 -> mr w 0.0 0.0 oneSixthH
+        Fn11 -> mr w oneSixthH 0.0 oneSixthH
+        Fn12 -> mr w oneThirdH 0.0 oneSixthH
+        Fn13 -> mr w oneHalfH 0.0 oneSixthH
+        Fn14 -> mr w twoThirdsH 0.0 oneSixthH
+        Fn15 -> mr w fiveSixthsH 0.0 oneSixthH
+        Fn16 -> mr 0.0 h oneFourthW 0.0
+        Fn17 -> mr oneFourthW h oneFourthW 0.0
+        Fn18 -> mr oneHalfW h oneFourthW 0.0
+        Fn19 -> mr threeFourthsW h oneFourthW 0.0
+
+flutePositions :: FluteNote -> Reader FluteDims Rectangle
+flutePositions v = do
+  { oneSixthW
+  , oneFourthW
+  , oneHalfW
+  , threeFourthsW
+  , fiveSixthsW
+  , w
+  , oneNinthH
+  , oneSixthH
+  , fiveEighteenthsH
+  , oneThirdH
+  , sevenEighteenthsH
+  , oneHalfH
+  , nineEighteenthsH
+  , elevenEighteenthsH
+  , twoThirdsH
+  , thirteenEighteenthsH
+  , fiveSixthsH
+  , h
+  } <-
+    ask
+  pure
+    $ case v of
+        Fn0 -> mr 0.0 0.0 oneFourthW oneSixthH
+        Fn1 -> mr oneFourthW 0.0 oneFourthW oneSixthH
+        Fn2 -> mr oneHalfW 0.0 oneFourthW oneSixthH
+        Fn3 -> mr threeFourthsW 0.0 oneFourthW oneSixthH
+        Fn4 -> mr 0.0 oneSixthH oneSixthW oneNinthH
+        Fn5 -> mr 0.0 fiveEighteenthsH oneSixthW oneNinthH
+        Fn6 -> mr 0.0 sevenEighteenthsH oneSixthW oneNinthH
+        Fn7 -> mr 0.0 nineEighteenthsH oneSixthW oneNinthH
+        Fn8 -> mr 0.0 elevenEighteenthsH oneSixthW oneNinthH
+        Fn9 -> mr 0.0 thirteenEighteenthsH oneSixthW oneNinthH
+        Fn10 -> mr fiveSixthsW oneSixthH oneSixthW oneNinthH
+        Fn11 -> mr fiveSixthsW fiveEighteenthsH oneSixthW oneNinthH
+        Fn12 -> mr fiveSixthsW sevenEighteenthsH oneSixthW oneNinthH
+        Fn13 -> mr fiveSixthsW nineEighteenthsH oneSixthW oneNinthH
+        Fn14 -> mr fiveSixthsW elevenEighteenthsH oneSixthW oneNinthH
+        Fn15 -> mr fiveSixthsW thirteenEighteenthsH oneSixthW oneNinthH
+        Fn16 -> mr 0.0 fiveSixthsH oneFourthW oneSixthH
+        Fn17 -> mr oneFourthW fiveSixthsH oneFourthW oneSixthH
+        Fn18 -> mr oneHalfW fiveSixthsH oneFourthW oneSixthH
+        Fn19 -> mr threeFourthsW fiveSixthsH oneFourthW oneSixthH
+
+synthPositions :: SynthVoice -> Reader SynthDims Rectangle
+synthPositions v = do
+  { oneSixthW
+  , oneSixthH
+  , twoNinthsW
+  , twoNinthsH
+  , oneThirdW
+  , oneThirdH
+  , sevenEighteenthsW
+  , sevenEighteenthsH
+  , elevenEighteenthsW
+  , elevenEighteenthsH
+  , twoThirdsW
+  , twoThirdsH
+  , sevenNinthsW
+  , sevenNinthsH
+  } <-
+    ask
+  pure
+    $ case v of
+        Sv0 -> mr twoNinthsW 0.0 oneSixthW oneThirdH
+        Sv1 -> mr elevenEighteenthsW 0.0 oneSixthW oneThirdH
+        Sv2 -> mr 0.0 twoNinthsH twoNinthsW oneSixthH
+        Sv3 -> mr sevenEighteenthsW twoNinthsH twoNinthsW oneSixthH
+        Sv4 -> mr sevenNinthsW twoNinthsH twoNinthsW oneSixthH
+        Sv5 -> mr twoNinthsW oneThirdH oneSixthW oneThirdH
+        Sv6 -> mr elevenEighteenthsW oneThirdH oneSixthW oneThirdH
+        Sv7 -> mr 0.0 elevenEighteenthsH twoNinthsW oneSixthH
+        Sv8 -> mr sevenEighteenthsW elevenEighteenthsH twoNinthsW oneSixthH
+        Sv9 -> mr sevenNinthsW elevenEighteenthsH twoNinthsW oneSixthH
+        Sv10 -> mr twoNinthsW twoThirdsH oneSixthW oneThirdH
+        Sv11 -> mr elevenEighteenthsW twoThirdsH oneSixthW oneThirdH
+
+mr :: Number -> Number -> Number -> Number -> Rectangle
+mr x y width height = { x, y, width, height }
+
+synthDisappearPositions :: SynthVoice -> Reader SynthDims Rectangle
+synthDisappearPositions v = do
+  { oneSixthW
+  , oneSixthH
+  , twoNinthsW
+  , twoNinthsH
+  , oneThirdW
+  , oneThirdH
+  , sevenEighteenthsW
+  , sevenEighteenthsH
+  , elevenEighteenthsW
+  , elevenEighteenthsH
+  , twoThirdsW
+  , twoThirdsH
+  , sevenNinthsW
+  , sevenNinthsH
+  } <-
+    ask
+  pure
+    $ case v of
+        Sv0 -> mr oneThirdW 0.0 0.0 oneThirdH
+        Sv1 -> mr twoThirdsW 0.0 0.0 oneThirdH
+        Sv2 -> mr 0.0 oneThirdH twoNinthsW 0.0
+        Sv3 -> mr sevenEighteenthsW oneThirdH twoNinthsW 0.0
+        Sv4 -> mr sevenNinthsW oneThirdH twoNinthsW 0.0
+        Sv5 -> mr oneThirdW oneThirdH 0.0 oneThirdH
+        Sv6 -> mr twoThirdsW oneThirdH 0.0 oneThirdH
+        Sv7 -> mr 0.0 twoThirdsH twoNinthsW 0.0
+        Sv8 -> mr sevenEighteenthsW twoThirdsH twoNinthsW 0.0
+        Sv9 -> mr sevenNinthsW twoThirdsH twoNinthsW 0.0
+        Sv10 -> mr oneThirdW twoThirdsH 0.0 oneThirdH
+        Sv11 -> mr twoThirdsW twoThirdsH 0.0 oneThirdH
+
+synthCoords :: Number -> Number -> Number -> SynthVoice -> Maybe Rectangle
+synthCoords w h n v
+  | n < secondVerseStarts = Nothing
+  | n < instrumentsFullyFadedIn =
+    Just
+      $ runReader
+          ( interpolateRectangles
+              secondVerseStarts
+              instrumentsFullyFadedIn
+              n
+              <$> synthDisappearPositions v
+              <*> synthPositions v
+          )
+          (synthDims w h)
+  | n < instrumentsStartFadingOut = Just $ runReader (synthPositions v) (synthDims w h)
+  | n < thirdVerseStarts =
+    Just
+      $ runReader
+          ( interpolateRectangles
+              instrumentsStartFadingOut
+              thirdVerseStarts
+              n
+              <$> synthPositions v
+              <*> synthDisappearPositions v
+          )
+          (synthDims w h)
+  | otherwise = Nothing
+
+fluteCoords :: Number -> Number -> Number -> FluteNote -> Maybe Rectangle
+fluteCoords w h n v
+  | n < thirdVerseStarts = Nothing
+  | n < fluteFullyFadedIn =
+    Just
+      $ runReader
+          ( interpolateRectangles
+              thirdVerseStarts
+              fluteFullyFadedIn
+              n
+              <$> fluteDisappearPositions v
+              <*> flutePositions v
+          )
+          (fluteDims w h)
+  | otherwise = Just $ runReader (flutePositions v) (fluteDims w h)
 
 env :: Env -> RenderInfo
 env e =
@@ -330,6 +697,12 @@ env e =
           , ymax: e.canvas.h - bellRadius - bellPadding
           }
           bells
+
+    bvCoords = backgroundVideoCoords e.canvas.w e.canvas.h e.time
+
+    sCoords = synthCoords e.canvas.w e.canvas.h e.time
+
+    fCoords = fluteCoords e.canvas.w e.canvas.h e.time
   in
     { audioEnv:
         { backgrondInfo: \_ -> { note: Nt0, onset: 0.0 }
@@ -362,7 +735,7 @@ env e =
         , soloistInfo: { color: rgba 0 0 0 0.0 }
         }
     , accumulator:
-        { backgroundBeat: \_ -> 0.0
+        { backgroundPlayhead: \_ -> 0.0
         , bells
         , bellsLoop
         , prevClicks:
@@ -407,7 +780,7 @@ main =
     , accumulator =
       \res _ ->
         res
-          { backgroundBeat: \_ -> 0.0
+          { backgroundPlayhead: \_ -> 0.0
           , bells: Nil
           , bellsLoop: bellsAsCycle
           , prevClicks: S.empty
@@ -451,6 +824,10 @@ data SynthVoice
   | Sv5
   | Sv6
   | Sv7
+  | Sv8
+  | Sv9
+  | Sv10
+  | Sv11
 
 data SynthNote
   = Sn0 -- I'm holding very tight.
@@ -490,10 +867,6 @@ data FluteNote
   | Fn17
   | Fn18
   | Fn19
-  | Fn20
-  | Fn21
-  | Fn22
-  | Fn23
 
 type BackgroundNoteInfo
   = { onset :: Number
