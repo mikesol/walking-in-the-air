@@ -747,6 +747,25 @@ fluteCoords w h n v
 bindBetween :: Number -> Number -> Number -> Number
 bindBetween mn mx n = max mn (min mx n)
 
+evtsToVideo :: BackgroundVoice -> (BackgroundVoice -> Rectangle) -> List BackgroundEventInfo -> Number -> Painting
+evtsToVideo v bvCoords evts time =
+  listAsNel mempty
+    ( \(NonEmpty a b) ->
+        let
+          currentEvent = foldl (\q r -> if q.onset > r.onset then q else r) a evts
+
+          videoCoords = bvCoords v
+
+          whRatio = videoCoords.width / videoCoords.height
+
+          wcrop = if whRatio > 1.0 then videoWidth else whRatio * videoHeight
+
+          resizeInfo = resizeVideo videoWidth videoHeight videoCoords.width videoCoords.height
+        in
+          drawImageFull (FromVideo { name: show v <> show currentEvent.note, currentTime: Just $ time - currentEvent.onset }) resizeInfo.x resizeInfo.y resizeInfo.sWidth resizeInfo.sHeight videoCoords.x videoCoords.y videoCoords.width videoCoords.height
+    )
+    evts
+
 evtToAudio :: BackgroundVoice -> Number -> BackgroundEventInfo -> AudioUnit D2
 evtToAudio v time { onset, interruptedAt, note } =
   gain_' (show onset <> show v <> show note <> "gain") (maybe 1.0 (\x -> bindBetween 0.0 1.0 $ calcSlope x 1.0 (x + 0.4) 0.0 time) interruptedAt)
@@ -840,23 +859,7 @@ env e =
               evts = activeBackgroundEvents v
             in
               { a: map (evtToAudio v e.time) evts
-              , v:
-                  listAsNel mempty
-                    ( \(NonEmpty a b) ->
-                        let
-                          currentEvent = foldl (\q r -> if q.onset > r.onset then q else r) a evts
-
-                          videoCoords = bvCoords v
-
-                          whRatio = videoCoords.width / videoCoords.height
-
-                          wcrop = if whRatio > 1.0 then videoWidth else whRatio * videoHeight
-
-                          resizeInfo = resizeVideo videoWidth videoHeight videoCoords.width videoCoords.height
-                        in
-                          drawImageFull (FromVideo { name: show v <> show currentEvent.note, currentTime: Just $ e.time - currentEvent.onset }) resizeInfo.x resizeInfo.y resizeInfo.sWidth resizeInfo.sHeight videoCoords.x videoCoords.y videoCoords.width videoCoords.height
-                    )
-                    evts
+              , v: evtsToVideo v bvCoords evts e.time
               }
         )
         backgroundVoices
