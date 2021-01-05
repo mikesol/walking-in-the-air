@@ -1,16 +1,19 @@
 module Klank.Dev where
 
 import Prelude
-import Color (rgba)
 import Control.Comonad.Cofree (Cofree, deferCofree)
 import Control.Comonad.Cofree as Cf
 import Control.Monad.Reader (Reader, ask, runReader)
 import Control.Monad.Rec.Class (Step(..), tailRec)
 import Data.DateTime.Instant (unInstant)
 import Data.Either (Either(..))
-import Data.Foldable (traverse_)
+import Data.Foldable (traverse_, foldl, fold)
+import Data.Generic.Rep (class Generic)
+import Data.Generic.Rep.Show (genericShow)
 import Data.Identity (Identity(..))
 import Data.Int (toNumber)
+import Data.Lens (over, traversed)
+import Data.Lens.Record (prop)
 import Data.List (List(..), (:))
 import Data.List as L
 import Data.Map (Map, insertWith)
@@ -21,7 +24,8 @@ import Data.NonEmpty (NonEmpty(..), (:|))
 import Data.Set (Set, member, union)
 import Data.Set as S
 import Data.String (indexOf, Pattern(..))
-import Data.Tuple (Tuple(..), fst)
+import Data.Symbol (SProxy(..))
+import Data.Tuple (Tuple(..), fst, snd)
 import Data.Typelevel.Num (D2, D8, d0, d1, d2, d3, d4, d5, d6, d7)
 import Data.Vec (Vec, (+>), empty)
 import Data.Vec as V
@@ -29,13 +33,13 @@ import Effect (Effect)
 import Effect.Now (now)
 import Effect.Ref as Ref
 import FRP.Behavior (Behavior, behavior)
-import FRP.Behavior.Audio (AV(..), AudioParameter, AudioUnit, CanvasInfo(..), defaultExporter, runInBrowser_)
+import FRP.Behavior.Audio (AV(..), AudioParameter, AudioUnit, CanvasInfo(..), EngineInfo, defaultExporter, defaultParam, gain_', playBufT_, runInBrowser_, speaker)
 import FRP.Event (Event, makeEvent, subscribe)
 import Graphics.Canvas (Rectangle)
 import Graphics.Drawing (Color, Point)
-import Graphics.Painting (Painting)
+import Graphics.Painting (ImageSource(..), Painting, drawImageFull)
 import Math (pow, (%))
-import Type.Klank.Dev (Klank', klank)
+import Type.Klank.Dev (Klank', defaultEngineInfo, klank)
 import Web.Event.EventTarget (EventListener, addEventListener, eventListener, removeEventListener)
 import Web.HTML (window)
 import Web.HTML.Navigator (userAgent)
@@ -49,11 +53,26 @@ import Web.TouchEvent.TouchList as TL
 import Web.UIEvent.MouseEvent (MouseEvent)
 import Web.UIEvent.MouseEvent as ME
 
+wereWalkingOnTheAirEngineInfo =
+  defaultEngineInfo
+    { msBetweenSamples = 40
+    , msBetweenPings = 35
+    } ::
+    EngineInfo
+
+kr = (toNumber wereWalkingOnTheAirEngineInfo.msBetweenSamples) / 1000.0 :: Number
+
+videoWidth = 320.0 :: Number
+
+videoHeight = 320.0 :: Number
+
 tempo = 60.0 :: Number
 
 beat = 60.0 / tempo :: Number
 
 measure = beat * 4.0 :: Number
+
+backgroundOverhang = beat :: Number
 
 sectionLen = measure * 9.0 :: Number
 
@@ -89,6 +108,40 @@ bridgeStartPlus8 = bridgeStarts + 8.0 * measure :: Number
 
 thirdVerseStarts = bridgeStarts + sectionLen :: Number
 
+type ResizeInfo
+  = { x :: Number
+    , y :: Number
+    , sWidth :: Number
+    , sHeight :: Number
+    }
+
+resizeVideo :: Number -> Number -> Number -> Number -> ResizeInfo
+resizeVideo sourceWidth sourceHeight targetWidth targetHeight =
+  let
+    sourceRatio = sourceWidth / sourceHeight
+
+    targetRatio = targetWidth / targetHeight
+
+    scale =
+      if sourceRatio < targetRatio then
+        sourceWidth / targetWidth
+      else
+        sourceHeight / targetHeight
+
+    resizeWidth = (sourceWidth / scale)
+
+    resizeHeight = (sourceHeight / scale)
+
+    cropLeft = ((resizeWidth - targetWidth) / 2.0)
+
+    cropTop = ((resizeHeight - targetHeight) / 2.0)
+  in
+    { x: cropLeft * scale
+    , y: cropTop * scale
+    , sWidth: sourceWidth - cropLeft * scale * 2.0
+    , sHeight: sourceHeight - cropTop * scale * 2.0
+    }
+
 calcSlope :: Number -> Number -> Number -> Number -> Number -> Number
 calcSlope x0 y0 x1 y1 x =
   if x1 == x0 || y1 == y0 then
@@ -101,16 +154,24 @@ calcSlope x0 y0 x1 y1 x =
     in
       m * x + b
 
+type BackgroundEventInfo
+  = { onset :: Number
+    , interruptedAt :: Maybe Number
+    , note :: BackgroundNote
+    }
+
 type WAccumulator
-  = { backgroundPlayhead :: BackgroundVoice -> Number
+  = { activeBackgroundEvents ::
+        BackgroundVoice ->
+        List BackgroundEventInfo
     , bells :: List BellAccumulatorInfo
     , bellsLoop :: CofreeList (Number -> Number)
     , prevClicks :: Set Int
     }
 
 type RenderInfo
-  = { audioEnv :: AudioEnv
-    , visualEnv :: VideoEnv
+  = { audio :: AudioUnit D2
+    , visual :: Painting
     , accumulator :: WAccumulator
     }
 
@@ -585,6 +646,15 @@ synthPositions v = do
 mr :: Number -> Number -> Number -> Number -> Rectangle
 mr x y width height = { x, y, width, height }
 
+isRectangleTouched :: List Interaction -> Rectangle -> Boolean
+isRectangleTouched l r = go l
+  where
+  go Nil = false
+
+  go ({ pt: Left pt } : b) = inRect pt r.x r.y r.width r.height || go b
+
+  go ({ pt: Right _ } : b) = go b
+
 synthDisappearPositions :: SynthVoice -> Reader SynthDims Rectangle
 synthDisappearPositions v = do
   { oneSixthW
@@ -632,7 +702,9 @@ synthCoords w h n v
               <*> synthPositions v
           )
           (synthDims w h)
-  | n < instrumentsStartFadingOut = Just $ runReader (synthPositions v) (synthDims w h)
+  | n < instrumentsStartFadingOut =
+    Just
+      $ runReader (synthPositions v) (synthDims w h)
   | n < thirdVerseStarts =
     Just
       $ runReader
@@ -645,6 +717,16 @@ synthCoords w h n v
           )
           (synthDims w h)
   | otherwise = Nothing
+
+listAsNel :: forall a b. b -> (NonEmpty List a -> b) -> List a -> b
+listAsNel b f Nil = b
+
+listAsNel _ f (a : b) = f (a :| b)
+
+toNel :: forall a. Monoid a => List a -> NonEmpty List a
+toNel Nil = mempty :| Nil
+
+toNel (a : b) = a :| b
 
 fluteCoords :: Number -> Number -> Number -> FluteNote -> Maybe Rectangle
 fluteCoords w h n v
@@ -661,6 +743,19 @@ fluteCoords w h n v
           )
           (fluteDims w h)
   | otherwise = Just $ runReader (flutePositions v) (fluteDims w h)
+
+bindBetween :: Number -> Number -> Number -> Number
+bindBetween mn mx n = max mn (min mx n)
+
+evtToAudio :: BackgroundVoice -> Number -> BackgroundEventInfo -> AudioUnit D2
+evtToAudio v time { onset, interruptedAt, note } =
+  gain_' (show onset <> show v <> show note <> "gain") (maybe 1.0 (\x -> bindBetween 0.0 1.0 $ calcSlope x 1.0 (x + 0.4) 0.0 time) interruptedAt)
+    ( playBufT_ (show onset <> show v <> show note <> "buf") (show v <> show note)
+        defaultParam
+          { param = 1.0
+          , timeOffset = if time < onset then onset - time else 0.0
+          }
+    )
 
 env :: Env -> RenderInfo
 env e =
@@ -679,9 +774,7 @@ env e =
         }
 
     { bells, stream: bellsLoop } =
-      if false then
-        { bells, stream: e.accumulator.bellsLoop }
-      else
+      if e.time >= bridgeStarts && e.time < thirdVerseStarts then
         introduceNewBells
           (max 0 $ 3 - (L.length e.accumulator.bells))
           e.accumulator.bellsLoop
@@ -697,45 +790,85 @@ env e =
           , ymax: e.canvas.h - bellRadius - bellPadding
           }
           bells
+      else
+        { bells, stream: e.accumulator.bellsLoop }
 
     bvCoords = backgroundVideoCoords e.canvas.w e.canvas.h e.time
+
+    isBackgroundVideoTocuhed = isRectangleTouched (map snd touches) <<< bvCoords
+
+    activeBackgroundEvents v =
+      let
+        prevEvents = e.accumulator.activeBackgroundEvents v
+
+        isTouched = isBackgroundVideoTocuhed v
+
+        filteredEvents = L.filter (\{ onset } -> onset + 2.0 * measure + backgroundOverhang < e.time) prevEvents
+
+        maxT = foldl (\a { onset } -> max a onset) 0.0 filteredEvents
+      in
+        ( ( if isTouched then
+              pure
+                { onset: e.time
+                , interruptedAt: Nothing
+                , note: backgroundNoteAt e.time
+                }
+            else
+              Nil
+          )
+            <> ( if (not isTouched) && maxT + 2.0 * measure > (e.time - kr) then
+                  pure
+                    { onset: maxT + 2.0 * measure
+                    , interruptedAt: Nothing
+                    , note: backgroundNoteAt e.time
+                    }
+                else
+                  Nil
+              )
+            <> over (traversed <<< prop (SProxy :: SProxy "interruptedAt"))
+                ( case _ of
+                    Just x -> Just x
+                    Nothing -> if isTouched then Just e.time else Nothing
+                )
+                filteredEvents
+        )
+
+    backgroundRenderingInfo =
+      map
+        ( \v ->
+            let
+              evts = activeBackgroundEvents v
+            in
+              { a: map (evtToAudio v e.time) evts
+              , v:
+                  listAsNel mempty
+                    ( \(NonEmpty a b) ->
+                        let
+                          currentEvent = foldl (\q r -> if q.onset > r.onset then q else r) a evts
+
+                          videoCoords = bvCoords v
+
+                          whRatio = videoCoords.width / videoCoords.height
+
+                          wcrop = if whRatio > 1.0 then videoWidth else whRatio * videoHeight
+
+                          resizeInfo = resizeVideo videoWidth videoHeight videoCoords.width videoCoords.height
+                        in
+                          drawImageFull (FromVideo { name: show v <> show currentEvent.note, currentTime: Just $ e.time - currentEvent.onset }) resizeInfo.x resizeInfo.y resizeInfo.sWidth resizeInfo.sHeight videoCoords.x videoCoords.y videoCoords.width videoCoords.height
+                    )
+                    evts
+              }
+        )
+        backgroundVoices
 
     sCoords = synthCoords e.canvas.w e.canvas.h e.time
 
     fCoords = fluteCoords e.canvas.w e.canvas.h e.time
   in
-    { audioEnv:
-        { backgrondInfo: \_ -> { note: Nt0, onset: 0.0 }
-        , synthInfo: \_ -> Nothing
-        , bellInfo: Nil
-        , fluteInfo: Nothing
-        , soloistInfo: { soloistEffect: 0.0 }
-        }
-    , visualEnv:
-        { backgroundInfo:
-            \_ ->
-              { currentTime: 0.0
-              , h: 0.0
-              , note: Nt0
-              , w: 0.0
-              , x: 0.0
-              , y: 0.0
-              }
-        , synthInfo:
-            \_ -> Nothing
-        , bellInfo: Nil
-        , fluteInfo:
-            \_ ->
-              { color: rgba 0 0 0 0.0
-              , h: 0.0
-              , w: 0.0
-              , x: 0.0
-              , y: 0.0
-              }
-        , soloistInfo: { color: rgba 0 0 0 0.0 }
-        }
+    { audio: speaker $ toNel (fold $ map _.a backgroundRenderingInfo)
+    , visual: fold (map _.v backgroundRenderingInfo)
     , accumulator:
-        { backgroundPlayhead: \_ -> 0.0
+        { activeBackgroundEvents
         , bells
         , bellsLoop
         , prevClicks:
@@ -745,27 +878,21 @@ env e =
         }
     }
 
-audioScene :: AudioEnv -> AudioUnit D2
-audioScene _ = zero
-
-visualScene :: VideoEnv -> Painting
-visualScene _ = mempty
-
 scene :: Interactions -> WAccumulator -> CanvasInfo -> Number -> Behavior (AV D2 WAccumulator)
 scene inter acc (CanvasInfo { w, h }) time = go <$> interactionLog inter
   where
   go { interactions } =
     AV
-      { audio: Just (audioScene audioEnv)
+      { audio: Just audio
       , visual:
           Just
-            { painting: \_ -> visualScene visualEnv
+            { painting: \_ -> visual
             , words: Nil
             }
       , accumulator
       }
     where
-    { audioEnv, visualEnv, accumulator } =
+    { audio, visual, accumulator } =
       env
         { accumulator: acc
         , interactions: M.toUnfoldable interactions
@@ -780,7 +907,14 @@ main =
     , accumulator =
       \res _ ->
         res
-          { backgroundPlayhead: \_ -> 0.0
+          { activeBackgroundEvents:
+              const
+                ( pure
+                    { onset: 0.0
+                    , note: Nt0
+                    , interruptedAt: Nothing
+                    }
+                )
           , bells: Nil
           , bellsLoop: bellsAsCycle
           , prevClicks: S.empty
@@ -799,6 +933,14 @@ data BackgroundVoice
   | Bv6
   | Bv7
 
+derive instance backgroundVoiceGeneric :: Generic BackgroundVoice _
+
+instance backgroundVoiceShow :: Show BackgroundVoice where
+  show = genericShow
+
+backgroundVoices :: List BackgroundVoice
+backgroundVoices = Bv0 : Bv1 : Bv2 : Bv3 : Bv4 : Bv5 : Bv6 : Bv7 : Nil
+
 data BackgroundNote
   = Nt0 -- We're walking in the air, We're floating in the moonlit
   | Nt1 -- sky. The people far below are
@@ -814,6 +956,11 @@ data BackgroundNote
   | Nt11 -- sky. And everyone who sees us
   | Nt12 -- greets us as we fly.
   | Nt13 -- [end]
+
+derive instance backgroundNoteGeneric :: Generic BackgroundNote _
+
+instance backgroundNoteShow :: Show BackgroundNote where
+  show = genericShow
 
 data SynthVoice
   = Sv0
@@ -867,6 +1014,23 @@ data FluteNote
   | Fn17
   | Fn18
   | Fn19
+
+backgroundNoteAt :: Number -> BackgroundNote
+backgroundNoteAt t
+  | t < firstVerseStarts + 3.0 * measure - beat = Nt0
+  | t < firstVerseStarts + 6.0 * measure - beat = Nt1
+  | t < firstVerseStarts + 7.0 * measure - beat = Nt2
+  | t < secondVerseStarts + 3.0 * measure - beat = Nt3
+  | t < secondVerseStarts + 6.0 * measure - beat = Nt4
+  | t < secondVerseStarts + 7.0 * measure - beat = Nt5
+  | t < bridgeStarts + 2.0 * measure - beat = Nt6
+  | t < bridgeStarts + 4.0 * measure - beat = Nt7
+  | t < bridgeStarts + 6.0 * measure - beat = Nt8
+  | t < bridgeStarts + 8.0 * measure - beat = Nt9
+  | t < thirdVerseStarts + 3.0 * measure - beat = Nt10
+  | t < thirdVerseStarts + 6.0 * measure - beat = Nt11
+  | t < thirdVerseStarts + 7.0 * measure - beat = Nt12
+  | otherwise = Nt13
 
 type BackgroundNoteInfo
   = { onset :: Number
