@@ -19,7 +19,7 @@ import Data.List (List(..), (:))
 import Data.List as L
 import Data.Map (Map, insertWith)
 import Data.Map as M
-import Data.Maybe (Maybe(..), fromMaybe, isJust, maybe)
+import Data.Maybe (Maybe(..), isJust, maybe)
 import Data.Newtype (unwrap, wrap)
 import Data.NonEmpty (NonEmpty(..), (:|))
 import Data.Set (Set, member, union)
