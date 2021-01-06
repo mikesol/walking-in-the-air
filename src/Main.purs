@@ -15,7 +15,7 @@ import Data.Identity (Identity(..))
 import Data.Int (floor, toNumber)
 import Data.Lens (over, traversed)
 import Data.Lens.Record (prop)
-import Data.List (List(..), (:), mapMaybe)
+import Data.List (List(..), (:))
 import Data.List as L
 import Data.Map (Map, insertWith)
 import Data.Map as M
@@ -774,16 +774,16 @@ backgroundEventsToVideo v bvCoords evts time =
     )
     evts
 
-synthEventToVideo :: SynthVoice -> SynthEventInfo -> Rectangle -> Painting
-synthEventToVideo v evt a =
+synthEventToVideo :: SynthVoice -> Number -> Rectangle -> Painting
+synthEventToVideo v energy a =
   filled
     ( fillGradient
-        (energyToGradient a (synthVoiceToBaseRGB v) evt.energy)
+        (energyToGradient a (synthVoiceToBaseRGB v) energy)
     )
     (rectangle a.x a.y a.width a.height)
 
-synthEventToAudio :: SynthVoice -> SynthEventInfo -> Number -> AudioUnit D2
-synthEventToAudio v evt time = mempty
+synthEventToAudio :: SynthVoice -> Number -> SynthEventInfo -> AudioUnit D2
+synthEventToAudio v time evt = mempty
 
 midiToMult :: Number -> Number
 midiToMult n = 2.0 `pow` ((60.0 - n) / 12.0)
@@ -1004,17 +1004,17 @@ env e =
     synthRenderingInfo =
       map
         ( \(Tuple v evt) ->
-            { a: synthEventToAudio v evt e.time
-            , v: fromMaybe mempty (synthEventToVideo v evt <$> sCoords v)
+            { a: synthEventToAudio v e.time <$> evt
+            , v:
+                synthEventToVideo v
+                  ( case evt of
+                      Nothing -> 0.0
+                      Just x -> x.energy
+                  )
+                  <$> sCoords v
             }
         )
-        ( mapMaybe
-            ( \(Tuple a b) -> case b of
-                Just x -> Just $ Tuple a x
-                Nothing -> Nothing
-            )
-            $ map (\v -> Tuple v (functionize activeSynthEvents v)) synthVoices
-        )
+        (map (\v -> Tuple v (functionize activeSynthEvents v)) synthVoices)
 
     fCoords = fluteCoords e.canvas.w e.canvas.h e.time
 
@@ -1031,14 +1031,14 @@ env e =
         speaker
           $ toNel
               ( (fold $ map _.a backgroundRenderingInfo)
-                  <> map _.a synthRenderingInfo
+                  <> L.catMaybes (map _.a synthRenderingInfo)
                   <> bellsToAudio bells e.time
                   <> pure (fluteHistoryToAudioUnit fluteHistory e.time)
               )
     , visual:
         fold
           ( fold (map _.v backgroundRenderingInfo)
-              : fold (map _.v synthRenderingInfo)
+              : fold (L.catMaybes (map _.v synthRenderingInfo))
               : bellsToVisual bells e.time
               : fold (fluteHistoryToVideo fCoords fluteHistory e.time)
               : Nil
