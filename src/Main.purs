@@ -1,6 +1,7 @@
 module Klank.Dev where
 
 import Prelude
+import Color (rgba)
 import Control.Comonad.Cofree (Cofree, deferCofree)
 import Control.Comonad.Cofree as Cf
 import Control.Monad.Reader (Reader, ask, runReader)
@@ -14,11 +15,11 @@ import Data.Identity (Identity(..))
 import Data.Int (toNumber)
 import Data.Lens (over, traversed)
 import Data.Lens.Record (prop)
-import Data.List (List(..), (:))
+import Data.List (List(..), (:), mapMaybe)
 import Data.List as L
 import Data.Map (Map, insertWith)
 import Data.Map as M
-import Data.Maybe (Maybe(..), isJust, maybe)
+import Data.Maybe (Maybe(..), fromMaybe, isJust, maybe)
 import Data.Newtype (unwrap, wrap)
 import Data.NonEmpty (NonEmpty(..), (:|))
 import Data.Set (Set, member, union)
@@ -33,11 +34,11 @@ import Effect (Effect)
 import Effect.Now (now)
 import Effect.Ref as Ref
 import FRP.Behavior (Behavior, behavior)
-import FRP.Behavior.Audio (AV(..), AudioParameter, AudioUnit, CanvasInfo(..), EngineInfo, defaultExporter, defaultParam, gain_', playBufT_, runInBrowser_, speaker)
+import FRP.Behavior.Audio (AV(..), AudioParameter, AudioUnit, CanvasInfo(..), EngineInfo, defaultExporter, defaultParam, gain_', playBufT_, playBuf_, runInBrowser_, speaker)
 import FRP.Event (Event, makeEvent, subscribe)
 import Graphics.Canvas (Rectangle)
 import Graphics.Drawing (Color, Point)
-import Graphics.Painting (ImageSource(..), Painting, drawImageFull)
+import Graphics.Painting (circle, filled, fillColor, ImageSource(..), Painting, drawImageFull)
 import Math (pow, (%))
 import Type.Klank.Dev (Klank', defaultEngineInfo, klank)
 import Web.Event.EventTarget (EventListener, addEventListener, eventListener, removeEventListener)
@@ -188,7 +189,7 @@ type Env
     , canvas :: { w :: Number, h :: Number }
     }
 
-bellOutro = 0.8 :: Number
+bellOutro = 1.6 :: Number
 
 type BellListener
   = { touches :: List (Tuple Int Interaction)
@@ -753,8 +754,8 @@ fluteCoords w h n v
 bindBetween :: Number -> Number -> Number -> Number
 bindBetween mn mx n = max mn (min mx n)
 
-evtsToVideo :: BackgroundVoice -> (BackgroundVoice -> Rectangle) -> List BackgroundEventInfo -> Number -> Painting
-evtsToVideo v bvCoords evts time =
+backgroundEventsToVideo :: BackgroundVoice -> (BackgroundVoice -> Rectangle) -> List BackgroundEventInfo -> Number -> Painting
+backgroundEventsToVideo v bvCoords evts time =
   listAsNel mempty
     ( \(NonEmpty a b) ->
         let
@@ -772,8 +773,52 @@ evtsToVideo v bvCoords evts time =
     )
     evts
 
-evtToAudio :: BackgroundVoice -> Number -> BackgroundEventInfo -> AudioUnit D2
-evtToAudio v time { onset, interruptedAt, note } =
+synthEventToVideo :: SynthVoice -> SynthEventInfo -> Number -> Rectangle -> Painting
+synthEventToVideo v svCoords evt time = mempty
+
+synthEventToAudio :: SynthVoice -> SynthEventInfo -> Number -> AudioUnit D2
+synthEventToAudio v evt time = mempty
+
+midiToMult :: Number -> Number
+midiToMult n = 2.0 `pow` ((60.0 - n) / 12.0)
+
+bellsToVisual :: List BellAccumulatorInfo -> Number -> Painting
+bellsToVisual l time = fold $ map go l
+  where
+  go bell =
+    let
+      opacity =
+        max 0.0
+          ( ( min 1.0
+                ( ( case bell.activated of
+                      Just x -> x
+                      Nothing -> time
+                  )
+                    - bell.onset
+                )
+            )
+              - ( case bell.activated of
+                    Just x -> time - x
+                    Nothing -> 0.0
+                )
+          )
+    in
+      filled (fillColor $ rgba 0 0 0 opacity) (circle bell.x bell.y bell.r)
+
+bellsToAudio :: List BellAccumulatorInfo -> Number -> List (AudioUnit D2)
+bellsToAudio l time = go l Nil
+  where
+  go Nil acc = acc
+
+  go (a : b) acc =
+    go b
+      ( case a.activated of
+          Nothing -> acc
+          Just x -> playBuf_ ("bell" <> show x <> show a.pitch) "bell" (midiToMult a.pitch) : acc
+      )
+
+backgroundEventsToAudio :: BackgroundVoice -> Number -> BackgroundEventInfo -> AudioUnit D2
+backgroundEventsToAudio v time { onset, interruptedAt, note } =
   gain_' (show onset <> show v <> show note <> "gain") (maybe 1.0 (\x -> bindBetween 0.0 1.0 $ calcSlope x 1.0 (x + 0.4) 0.0 time) interruptedAt)
     ( playBufT_ (show onset <> show v <> show note <> "buf") (show v <> show note)
         defaultParam
@@ -865,8 +910,8 @@ env e =
             let
               evts = functionize activeBackgroundEvents v
             in
-              { a: map (evtToAudio v e.time) evts
-              , v: evtsToVideo v bvCoords evts e.time
+              { a: map (backgroundEventsToAudio v e.time) evts
+              , v: backgroundEventsToVideo v bvCoords evts e.time
               }
         )
         backgroundVoices
@@ -901,6 +946,21 @@ env e =
             Nothing -> if not isTouched then Nothing else Just { energy: kr, note: synthNoteAt e.time }
             Just { energy, note } -> if not isTouched && energy - kr <= 0.0 then Nothing else Just { energy: energy - kr, note }
 
+    synthRenderingInfo =
+      map
+        ( \(Tuple v evt) ->
+            { a: synthEventToAudio v evt e.time
+            , v: fromMaybe mempty (synthEventToVideo v evt e.time <$> sCoords v)
+            }
+        )
+        ( mapMaybe
+            ( \(Tuple a b) -> case b of
+                Just x -> Just $ Tuple a x
+                Nothing -> Nothing
+            )
+            $ map (\v -> Tuple v (functionize activeSynthEvents v)) synthVoices
+        )
+
     fCoords = fluteCoords e.canvas.w e.canvas.h e.time
 
     isFluteTocuhed =
@@ -910,8 +970,20 @@ env e =
       )
         <<< fCoords
   in
-    { audio: speaker $ toNel (fold $ map _.a backgroundRenderingInfo)
-    , visual: fold (map _.v backgroundRenderingInfo)
+    { audio:
+        speaker
+          $ toNel
+              ( (fold $ map _.a backgroundRenderingInfo)
+                  <> map _.a synthRenderingInfo
+                  <> bellsToAudio bells e.time
+              )
+    , visual:
+        fold
+          ( fold (map _.v backgroundRenderingInfo)
+              : fold (map _.v synthRenderingInfo)
+              : bellsToVisual bells e.time
+              : Nil
+          )
     , accumulator:
         { activeBackgroundEvents
         , activeSynthEvents
@@ -1025,6 +1097,9 @@ instance backgroundVoiceShow :: Show BackgroundVoice where
 
 backgroundVoices :: List BackgroundVoice
 backgroundVoices = Bv0 : Bv1 : Bv2 : Bv3 : Bv4 : Bv5 : Bv6 : Bv7 : Nil
+
+synthVoices :: List SynthVoice
+synthVoices = Sv0 : Sv1 : Sv2 : Sv3 : Sv4 : Sv5 : Sv6 : Sv7 : Sv8 : Sv9 : Sv10 : Sv11 : Nil
 
 data BackgroundNote
   = Nt0 -- We're walking in the air, We're floating in the moonlit
