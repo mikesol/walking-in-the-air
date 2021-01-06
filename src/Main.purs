@@ -1,7 +1,7 @@
 module Klank.Dev where
 
 import Prelude
-import Color (rgba)
+import Color (rgb, rgba)
 import Control.Comonad.Cofree (Cofree, deferCofree)
 import Control.Comonad.Cofree as Cf
 import Control.Monad.Reader (Reader, ask, runReader)
@@ -12,7 +12,7 @@ import Data.Foldable (traverse_, foldl, fold)
 import Data.Generic.Rep (class Generic)
 import Data.Generic.Rep.Show (genericShow)
 import Data.Identity (Identity(..))
-import Data.Int (toNumber)
+import Data.Int (floor, toNumber)
 import Data.Lens (over, traversed)
 import Data.Lens.Record (prop)
 import Data.List (List(..), (:), mapMaybe)
@@ -38,8 +38,8 @@ import FRP.Behavior.Audio (AV(..), AudioUnit, CanvasInfo(..), EngineInfo, defaul
 import FRP.Event (Event, makeEvent, subscribe)
 import Graphics.Canvas (Rectangle)
 import Graphics.Drawing (Color, Point)
-import Graphics.Painting (circle, filled, fillColor, rectangle, ImageSource(..), Painting, drawImageFull)
-import Math (pow, (%))
+import Graphics.Painting (Gradient(..), ImageSource(..), Painting, circle, drawImageFull, fillColor, fillGradient, filled, rectangle)
+import Math (pi, pow, sin, (%))
 import Type.Klank.Dev (Klank', defaultEngineInfo, klank)
 import Web.Event.EventTarget (EventListener, addEventListener, eventListener, removeEventListener)
 import Web.HTML (window)
@@ -774,8 +774,13 @@ backgroundEventsToVideo v bvCoords evts time =
     )
     evts
 
-synthEventToVideo :: SynthVoice -> SynthEventInfo -> Number -> Rectangle -> Painting
-synthEventToVideo v svCoords evt time = mempty
+synthEventToVideo :: SynthVoice -> SynthEventInfo -> Rectangle -> Painting
+synthEventToVideo v evt a =
+  filled
+    ( fillGradient
+        (energyToGradient a (synthVoiceToBaseRGB v) evt.energy)
+    )
+    (rectangle a.x a.y a.width a.height)
 
 synthEventToAudio :: SynthVoice -> SynthEventInfo -> Number -> AudioUnit D2
 synthEventToAudio v evt time = mempty
@@ -1000,7 +1005,7 @@ env e =
       map
         ( \(Tuple v evt) ->
             { a: synthEventToAudio v evt e.time
-            , v: fromMaybe mempty (synthEventToVideo v evt e.time <$> sCoords v)
+            , v: fromMaybe mempty (synthEventToVideo v evt <$> sCoords v)
             }
         )
         ( mapMaybe
@@ -1191,6 +1196,58 @@ data SynthVoice
   | Sv9
   | Sv10
   | Sv11
+
+data RGB
+  = RGB Int Int Int
+
+synthVoiceToBaseRGB :: SynthVoice -> RGB
+synthVoiceToBaseRGB Sv0 = RGB 85 239 196
+
+synthVoiceToBaseRGB Sv1 = RGB 0 206 201
+
+synthVoiceToBaseRGB Sv2 = RGB 108 92 231
+
+synthVoiceToBaseRGB Sv3 = RGB 162 155 254
+
+synthVoiceToBaseRGB Sv4 = RGB 255 234 167
+
+synthVoiceToBaseRGB Sv5 = RGB 129 236 236
+
+synthVoiceToBaseRGB Sv6 = RGB 250 177 160
+
+synthVoiceToBaseRGB Sv7 = RGB 214 48 49
+
+synthVoiceToBaseRGB Sv8 = RGB 0 184 148
+
+synthVoiceToBaseRGB Sv9 = RGB 9 132 227
+
+synthVoiceToBaseRGB Sv10 = RGB 0 206 201
+
+synthVoiceToBaseRGB Sv11 = RGB 116 185 255
+
+rectanglePeriod :: Number -> Number -> Number -> Number -> Number -> { x0 :: Number, y0 :: Number, x1 :: Number, y1 :: Number }
+rectanglePeriod x0 y0 x1 y1 energy = go (energy % 1.0)
+  where
+  pt0 = (x1 - x0) / (2.0 * ((x1 - x0) + (y1 - y0)))
+
+  go t
+    | t < pt0 = let xp = (x1 - x0) * t / pt0 in { x0: x0 + xp, y0, x1: x1 - xp, y1 }
+    | t < 0.5 = let yp = (y1 - y0) * (t - pt0) / (0.5 - pt0) in { x0: x1, y0: y0 + yp, x1: x0, y1: y1 - yp }
+    | t < 0.5 + pt0 = let xp = (x1 - x0) * (t - 0.5) / pt0 in { x0: x1 - xp, y0: y1, x1: x0 + xp, y1: y0 }
+    | otherwise = let yp = (y1 - y0) * (t - 0.5 - pt0) / (0.5 - pt0) in { x0, y0: y1 - yp, x1, y1: y0 + yp }
+
+energyToGradient :: Rectangle -> RGB -> Number -> Gradient
+energyToGradient { x, y, width, height } (RGB r g b) energy =
+  let
+    { x0, y0, x1, y1 } = rectanglePeriod x y (x + width) (y + height) energy
+  in
+    LinearGradient
+      { x0, y0, x1, y1
+      }
+      ( map
+          (\i' -> let i = toNumber i' in { color: rgb ((r + floor (i * energy)) `mod` 256) ((g - floor (i * energy)) `mod` 256) ((b + floor (i * energy)) `mod` 256), position: 0.5 + 0.5 * sin (pi * (energy + i / 5.0)) })
+          (L.range 0 9)
+      )
 
 newtype SynthVoice' a
   = SynthVoice'
