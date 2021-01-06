@@ -70,6 +70,8 @@ tempo = 60.0 :: Number
 
 beat = 60.0 / tempo :: Number
 
+halfBeat = beat / 2.0 :: Number
+
 measure = beat * 4.0 :: Number
 
 backgroundOverhang = beat :: Number
@@ -160,10 +162,14 @@ type BackgroundEventInfo
     , note :: BackgroundNote
     }
 
+type SynthEventInfo
+  = { energy :: Number
+    , note :: SynthNote
+    }
+
 type WAccumulator
-  = { activeBackgroundEvents ::
-        BackgroundVoice ->
-        List BackgroundEventInfo
+  = { activeBackgroundEvents :: BackgroundVoice' (List BackgroundEventInfo)
+    , activeSynthEvents :: SynthVoice' (Maybe SynthEventInfo)
     , bells :: List BellAccumulatorInfo
     , bellsLoop :: CofreeList (Number -> Number)
     , prevClicks :: Set Int
@@ -816,47 +822,48 @@ env e =
 
     isBackgroundVideoTocuhed = isRectangleTouched (map snd touches) <<< bvCoords
 
-    activeBackgroundEvents v =
-      let
-        prevEvents = e.accumulator.activeBackgroundEvents v
+    activeBackgroundEvents =
+      memoize \v ->
+        let
+          prevEvents = functionize e.accumulator.activeBackgroundEvents v
 
-        isTouched = isBackgroundVideoTocuhed v
+          isTouched = isBackgroundVideoTocuhed v
 
-        filteredEvents = L.filter (\{ onset } -> onset + 2.0 * measure + backgroundOverhang < e.time) prevEvents
+          filteredEvents = L.filter (\{ onset } -> onset + 2.0 * measure + backgroundOverhang < e.time) prevEvents
 
-        maxT = foldl (\a { onset } -> max a onset) 0.0 filteredEvents
-      in
-        ( ( if isTouched then
-              pure
-                { onset: e.time
-                , interruptedAt: Nothing
-                , note: backgroundNoteAt e.time
-                }
-            else
-              Nil
-          )
-            <> ( if (not isTouched) && maxT + 2.0 * measure > (e.time - kr) then
-                  pure
-                    { onset: maxT + 2.0 * measure
-                    , interruptedAt: Nothing
-                    , note: backgroundNoteAt e.time
-                    }
-                else
-                  Nil
-              )
-            <> over (traversed <<< prop (SProxy :: SProxy "interruptedAt"))
-                ( case _ of
-                    Just x -> Just x
-                    Nothing -> if isTouched then Just e.time else Nothing
+          maxT = foldl (\a { onset } -> max a onset) 0.0 filteredEvents
+        in
+          ( ( if isTouched then
+                pure
+                  { onset: e.time
+                  , interruptedAt: Nothing
+                  , note: backgroundNoteAt e.time
+                  }
+              else
+                Nil
+            )
+              <> ( if (not isTouched) && maxT + 2.0 * measure > (e.time - kr) then
+                    pure
+                      { onset: maxT + 2.0 * measure
+                      , interruptedAt: Nothing
+                      , note: backgroundNoteAt e.time
+                      }
+                  else
+                    Nil
                 )
-                filteredEvents
-        )
+              <> over (traversed <<< prop (SProxy :: SProxy "interruptedAt"))
+                  ( case _ of
+                      Just x -> Just x
+                      Nothing -> if isTouched then Just e.time else Nothing
+                  )
+                  filteredEvents
+          )
 
     backgroundRenderingInfo =
       map
         ( \v ->
             let
-              evts = activeBackgroundEvents v
+              evts = functionize activeBackgroundEvents v
             in
               { a: map (evtToAudio v e.time) evts
               , v: evtsToVideo v bvCoords evts e.time
@@ -866,12 +873,48 @@ env e =
 
     sCoords = synthCoords e.canvas.w e.canvas.h e.time
 
+    -- for the synth, we also count ongoing touches
+    isSynthTouched =
+      ( case _ of
+          Nothing -> false
+          Just x ->
+            isRectangleTouched
+              ( map snd
+                  ( touches
+                      <> L.filter
+                          (\(Tuple a _) -> a `member` e.accumulator.prevClicks)
+                          e.interactions
+                  )
+              )
+              x
+      )
+        <<< sCoords
+
+    activeSynthEvents =
+      memoize \v ->
+        let
+          prevEvent = functionize e.accumulator.activeSynthEvents v
+
+          isTouched = isSynthTouched v
+        in
+          case prevEvent of
+            Nothing -> if not isTouched then Nothing else Just { energy: kr, note: synthNoteAt e.time }
+            Just { energy, note } -> if not isTouched && energy - kr <= 0.0 then Nothing else Just { energy: energy - kr, note }
+
     fCoords = fluteCoords e.canvas.w e.canvas.h e.time
+
+    isFluteTocuhed =
+      ( case _ of
+          Nothing -> false
+          Just x -> isRectangleTouched (map snd touches) x
+      )
+        <<< fCoords
   in
     { audio: speaker $ toNel (fold $ map _.a backgroundRenderingInfo)
     , visual: fold (map _.v backgroundRenderingInfo)
     , accumulator:
         { activeBackgroundEvents
+        , activeSynthEvents
         , bells
         , bellsLoop
         , prevClicks:
@@ -911,13 +954,15 @@ main =
       \res _ ->
         res
           { activeBackgroundEvents:
-              const
-                ( pure
-                    { onset: 0.0
-                    , note: Nt0
-                    , interruptedAt: Nothing
-                    }
-                )
+              memoize
+                $ const
+                    ( pure
+                        { onset: 0.0
+                        , note: Nt0
+                        , interruptedAt: Nothing
+                        }
+                    )
+          , activeSynthEvents: memoize (const Nothing)
           , bells: Nil
           , bellsLoop: bellsAsCycle
           , prevClicks: S.empty
@@ -935,6 +980,43 @@ data BackgroundVoice
   | Bv5
   | Bv6
   | Bv7
+
+newtype BackgroundVoice' a
+  = BackgroundVoice'
+  { bv0 :: a
+  , bv1 :: a
+  , bv2 :: a
+  , bv3 :: a
+  , bv4 :: a
+  , bv5 :: a
+  , bv6 :: a
+  , bv7 :: a
+  }
+
+class Memoizable f g | f -> g, g -> f where
+  memoize :: Function f ~> g
+  functionize :: g ~> Function f
+
+instance memoizableBackgroundVoice :: Memoizable BackgroundVoice BackgroundVoice' where
+  memoize f =
+    BackgroundVoice'
+      { bv0: f Bv0
+      , bv1: f Bv1
+      , bv2: f Bv2
+      , bv3: f Bv3
+      , bv4: f Bv4
+      , bv5: f Bv5
+      , bv6: f Bv6
+      , bv7: f Bv7
+      }
+  functionize (BackgroundVoice' { bv0 }) Bv0 = bv0
+  functionize (BackgroundVoice' { bv1 }) Bv1 = bv1
+  functionize (BackgroundVoice' { bv2 }) Bv2 = bv2
+  functionize (BackgroundVoice' { bv3 }) Bv3 = bv3
+  functionize (BackgroundVoice' { bv4 }) Bv4 = bv4
+  functionize (BackgroundVoice' { bv5 }) Bv5 = bv5
+  functionize (BackgroundVoice' { bv6 }) Bv6 = bv6
+  functionize (BackgroundVoice' { bv7 }) Bv7 = bv7
 
 derive instance backgroundVoiceGeneric :: Generic BackgroundVoice _
 
@@ -979,6 +1061,51 @@ data SynthVoice
   | Sv10
   | Sv11
 
+newtype SynthVoice' a
+  = SynthVoice'
+  { sv0 :: a
+  , sv1 :: a
+  , sv2 :: a
+  , sv3 :: a
+  , sv4 :: a
+  , sv5 :: a
+  , sv6 :: a
+  , sv7 :: a
+  , sv8 :: a
+  , sv9 :: a
+  , sv10 :: a
+  , sv11 :: a
+  }
+
+instance memoizableSynthVoice :: Memoizable SynthVoice SynthVoice' where
+  memoize f =
+    SynthVoice'
+      { sv0: f Sv0
+      , sv1: f Sv1
+      , sv2: f Sv2
+      , sv3: f Sv3
+      , sv4: f Sv4
+      , sv5: f Sv5
+      , sv6: f Sv6
+      , sv7: f Sv7
+      , sv8: f Sv8
+      , sv9: f Sv9
+      , sv10: f Sv10
+      , sv11: f Sv11
+      }
+  functionize (SynthVoice' { sv0 }) Sv0 = sv0
+  functionize (SynthVoice' { sv1 }) Sv1 = sv1
+  functionize (SynthVoice' { sv2 }) Sv2 = sv2
+  functionize (SynthVoice' { sv3 }) Sv3 = sv3
+  functionize (SynthVoice' { sv4 }) Sv4 = sv4
+  functionize (SynthVoice' { sv5 }) Sv5 = sv5
+  functionize (SynthVoice' { sv6 }) Sv6 = sv6
+  functionize (SynthVoice' { sv7 }) Sv7 = sv7
+  functionize (SynthVoice' { sv8 }) Sv8 = sv8
+  functionize (SynthVoice' { sv9 }) Sv9 = sv9
+  functionize (SynthVoice' { sv10 }) Sv10 = sv10
+  functionize (SynthVoice' { sv11 }) Sv11 = sv11
+
 data SynthNote
   = Sn0 -- I'm holding very tight.
   | Sn1 -- I'm riding in the midnight 
@@ -995,6 +1122,24 @@ data SynthNote
   | Sn12 -- believes
   | Sn13 -- their
   | Sn14 -- eyes.
+
+synthNoteAt :: Number -> SynthNote
+synthNoteAt t
+  | t < secondVerseStarts + 2.0 * measure - halfBeat = Sn0
+  | t < secondVerseStarts + 3.0 * measure - halfBeat = Sn1
+  | t < secondVerseStarts + 5.0 * measure - halfBeat = Sn2
+  | t < secondVerseStarts + 6.0 * measure - halfBeat = Sn3
+  | t < secondVerseStarts + 7.0 * measure - halfBeat = Sn4
+  | t < bridgeStarts - halfBeat = Sn5
+  | t < bridgeStarts + 1.0 * measure - halfBeat = Sn6
+  | t < bridgeStarts + 2.0 * measure - halfBeat = Sn7
+  | t < bridgeStarts + 3.0 * measure - halfBeat = Sn8
+  | t < bridgeStarts + 4.0 * measure - halfBeat = Sn9
+  | t < bridgeStarts + 5.0 * measure - halfBeat = Sn10
+  | t < bridgeStarts + 6.0 * measure - halfBeat = Sn11
+  | t < bridgeStarts + 7.0 * measure - halfBeat = Sn12
+  | t < bridgeStarts + 8.0 * measure - halfBeat = Sn13
+  | otherwise = Sn14
 
 data FluteNote
   = Fn0
@@ -1035,16 +1180,6 @@ backgroundNoteAt t
   | t < thirdVerseStarts + 7.0 * measure - beat = Nt12
   | otherwise = Nt13
 
-type BackgroundNoteInfo
-  = { onset :: Number
-    , note :: BackgroundNote
-    }
-
-type SynthNoteInfo
-  = { intensity :: Number
-    , note :: SynthNote
-    }
-
 type BellNoteInfo
   = { onset :: Number, note :: Number }
 
@@ -1055,14 +1190,6 @@ type FluteNoteInfo
 
 type SoloistNoteInfo
   = { soloistEffect :: Number
-    }
-
-type AudioEnv
-  = { backgrondInfo :: BackgroundVoice -> BackgroundNoteInfo
-    , synthInfo :: SynthVoice -> Maybe SynthNoteInfo
-    , bellInfo :: List BellNoteInfo
-    , fluteInfo :: Maybe FluteNoteInfo
-    , soloistInfo :: SoloistNoteInfo
     }
 
 type BackgroundVideoInfo
@@ -1108,14 +1235,6 @@ type FluteVideoInfo
 
 type SoloistVideoInfo
   = { color :: Color
-    }
-
-type VideoEnv
-  = { backgroundInfo :: BackgroundVoice -> BackgroundVideoInfo
-    , synthInfo :: SynthVoice -> Maybe SynthVideoInfo
-    , bellInfo :: List BellVideoInfo
-    , fluteInfo :: FluteNote -> FluteVideoInfo
-    , soloistInfo :: SoloistVideoInfo
     }
 
 newtype Interactions
