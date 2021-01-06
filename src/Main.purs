@@ -34,11 +34,11 @@ import Effect (Effect)
 import Effect.Now (now)
 import Effect.Ref as Ref
 import FRP.Behavior (Behavior, behavior)
-import FRP.Behavior.Audio (AV(..), AudioParameter, AudioUnit, CanvasInfo(..), EngineInfo, defaultExporter, defaultParam, gain_', playBufT_, playBuf_, runInBrowser_, speaker)
+import FRP.Behavior.Audio (AV(..), AudioUnit, CanvasInfo(..), EngineInfo, defaultExporter, defaultParam, gain_', playBufT_, playBuf_, runInBrowser_, speaker)
 import FRP.Event (Event, makeEvent, subscribe)
 import Graphics.Canvas (Rectangle)
 import Graphics.Drawing (Color, Point)
-import Graphics.Painting (circle, filled, fillColor, ImageSource(..), Painting, drawImageFull)
+import Graphics.Painting (circle, filled, fillColor, rectangle, ImageSource(..), Painting, drawImageFull)
 import Math (pow, (%))
 import Type.Klank.Dev (Klank', defaultEngineInfo, klank)
 import Web.Event.EventTarget (EventListener, addEventListener, eventListener, removeEventListener)
@@ -173,6 +173,7 @@ type WAccumulator
     , activeSynthEvents :: SynthVoice' (Maybe SynthEventInfo)
     , bells :: List BellAccumulatorInfo
     , bellsLoop :: CofreeList (Number -> Number)
+    , fluteHistory :: List FluteAccumulatorInfo
     , prevClicks :: Set Int
     }
 
@@ -827,6 +828,55 @@ backgroundEventsToAudio v time { onset, interruptedAt, note } =
           }
     )
 
+fluteNotes = Fn0 : Fn1 : Fn2 : Fn3 : Fn4 : Fn5 : Fn6 : Fn7 : Fn8 : Fn9 : Fn10 : Fn11 : Fn12 : Fn13 : Fn14 : Fn15 : Fn16 : Fn17 : Fn18 : Fn19 : Nil :: List FluteNote
+
+fluteHistoryToAudioUnit :: List FluteAccumulatorInfo -> Number -> AudioUnit D2
+fluteHistoryToAudioUnit l time = mempty
+
+selectedFluteColor :: FluteNote -> Color
+selectedFluteColor v = rgba 0 0 0 0.0
+
+unselectedFluteColor :: FluteNote -> Color
+unselectedFluteColor v = rgba 245 0 0 0.0
+
+fluteHistoryToVideo :: (FluteNote -> Maybe Rectangle) -> List FluteAccumulatorInfo -> Number -> List Painting
+fluteHistoryToVideo f l time =
+  if time < thirdVerseStarts then
+    Nil
+  else
+    go
+      ( case l of
+          Nil -> Nothing
+          (a : b) -> Just a.note
+      )
+      (map (\x -> Tuple x (f x)) fluteNotes)
+      Nil
+  where
+  go _ Nil acc = acc
+
+  go sel (Tuple fn (Just a) : b) acc =
+    go sel b
+      ( filled
+          ( fillColor
+              $ ( case sel of
+                    Nothing -> unselectedFluteColor
+                    Just x -> if x == fn then selectedFluteColor else unselectedFluteColor
+                )
+                  fn
+          )
+          (rectangle a.x a.y a.width a.height)
+          : acc
+      )
+
+  go sel (_ : b) acc = go sel b acc
+
+modFluteHistory :: (FluteNote -> Boolean) -> List FluteAccumulatorInfo -> Number -> List FluteNote -> List FluteAccumulatorInfo
+modFluteHistory f acc' time notes = go notes acc'
+  where
+  go Nil acc = acc
+
+  go (a : b) acc = go b (if f a then { onset: time, note: a } : acc else acc)
+
 env :: Env -> RenderInfo
 env e =
   let
@@ -963,12 +1013,14 @@ env e =
 
     fCoords = fluteCoords e.canvas.w e.canvas.h e.time
 
-    isFluteTocuhed =
+    isFluteTouched =
       ( case _ of
           Nothing -> false
           Just x -> isRectangleTouched (map snd touches) x
       )
         <<< fCoords
+
+    fluteHistory = modFluteHistory isFluteTouched e.accumulator.fluteHistory e.time fluteNotes
   in
     { audio:
         speaker
@@ -976,12 +1028,14 @@ env e =
               ( (fold $ map _.a backgroundRenderingInfo)
                   <> map _.a synthRenderingInfo
                   <> bellsToAudio bells e.time
+                  <> pure (fluteHistoryToAudioUnit fluteHistory e.time)
               )
     , visual:
         fold
           ( fold (map _.v backgroundRenderingInfo)
               : fold (map _.v synthRenderingInfo)
               : bellsToVisual bells e.time
+              : fold (fluteHistoryToVideo fCoords fluteHistory e.time)
               : Nil
           )
     , accumulator:
@@ -989,6 +1043,7 @@ env e =
         , activeSynthEvents
         , bells
         , bellsLoop
+        , fluteHistory
         , prevClicks:
             e.accumulator.prevClicks
               `union`
@@ -1036,6 +1091,7 @@ main =
                     )
           , activeSynthEvents: memoize (const Nothing)
           , bells: Nil
+          , fluteHistory: Nil
           , bellsLoop: bellsAsCycle
           , prevClicks: S.empty
           }
@@ -1238,6 +1294,8 @@ data FluteNote
   | Fn18
   | Fn19
 
+derive instance fluteNoteEq :: Eq FluteNote
+
 backgroundNoteAt :: Number -> BackgroundNote
 backgroundNoteAt t
   | t < firstVerseStarts + 3.0 * measure - beat = Nt0
@@ -1257,11 +1315,6 @@ backgroundNoteAt t
 
 type BellNoteInfo
   = { onset :: Number, note :: Number }
-
-type FluteNoteInfo
-  = { gain :: AudioParameter
-    , note :: FluteNote
-    }
 
 type SoloistNoteInfo
   = { soloistEffect :: Number
@@ -1291,6 +1344,11 @@ type BellAccumulatorInfo
     , x :: Number
     , y :: Number
     , r :: Number
+    }
+
+type FluteAccumulatorInfo
+  = { onset :: Number
+    , note :: FluteNote
     }
 
 type BellVideoInfo
