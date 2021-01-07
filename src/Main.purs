@@ -919,6 +919,8 @@ type FluteHistoryIntermediaryCalc
 type FluteHistoryIntermediaryCalcHolder
   = { sum :: Number, res :: List FluteHistoryIntermediaryCalc, minTime :: Number }
 
+fluteGain = 0.2 :: Number
+
 fluteHistoryToAudioUnit :: List FluteAccumulatorInfo -> Number -> Maybe (AudioUnit D2)
 fluteHistoryToAudioUnit Nil time = Nothing
 
@@ -928,7 +930,11 @@ fluteHistoryToAudioUnit l@(a : b) time =
 
     pitchAsFloat = pitchInfo sum res 0.0
   in
-    mempty
+    Just
+      $ pannerMono_ ("flutePannerMono") 0.0
+          ( gain_' ("fluteGain") (bindBetween 0.0 fluteGain (fluteGain * (time - minTime) / 3.0))
+              (sinOsc_ ("fluteGainPhlder") (calcSlope 0.0 200.0 1.0 1500.0 pitchAsFloat))
+          )
   where
   pitchInfo sum Nil n = n
 
