@@ -113,6 +113,12 @@ videoWidth = 320.0 :: Number
 
 videoHeight = 320.0 :: Number
 
+snowWidth = 1000.0 :: Number
+
+snowHeight = 1000.0 :: Number
+
+snowVideoLen = 30.0 :: Number
+
 tempo = 60.0 :: Number
 
 beat = 60.0 / tempo :: Number
@@ -125,7 +131,11 @@ backgroundOverhang = beat :: Number
 
 sectionLen = measure * 9.0 :: Number
 
-introLen = beat * 8.0 :: Number
+introLen = measure * 6.0 :: Number
+
+touchableStarts = measure * 4.0 :: Number
+
+singingStarts = measure * 2.0 :: Number
 
 firstVerseStarts = introLen :: Number
 
@@ -156,6 +166,10 @@ bridgeStartPlus7 = bridgeStarts + 7.0 * measure :: Number
 bridgeStartPlus8 = bridgeStarts + 8.0 * measure :: Number
 
 thirdVerseStarts = bridgeStarts + sectionLen :: Number
+
+thirdVerseEnds = thirdVerseStarts + sectionLen :: Number
+
+pieceEnds = thirdVerseStarts + 2.0 * measure :: Number
 
 type ResizeInfo
   = { x :: Number
@@ -224,7 +238,7 @@ type WAccumulator
     }
 
 type RenderInfo
-  = { audio :: AudioUnit D2
+  = { audio :: List (AudioUnit D2)
     , visual :: Painting
     , accumulator :: WAccumulator
     }
@@ -871,13 +885,19 @@ bellsToAudio l time = go l Nil
 
 backgroundEventsToAudio :: BackgroundVoice -> Number -> BackgroundEventInfo -> AudioUnit D2
 backgroundEventsToAudio v time { onset, interruptedAt, note } =
-  gain_' (show onset <> show v <> show note <> "gain") (maybe 1.0 (\x -> bindBetween 0.0 1.0 $ calcSlope x 1.0 (x + 0.4) 0.0 time) interruptedAt)
-    ( playBufT_ (show onset <> show v <> show note <> "buf") (show v <> show note)
-        defaultParam
-          { param = 1.0
-          , timeOffset = if time < onset then onset - time else 0.0
-          }
-    )
+  let
+    gmult
+      | time < singingStarts = 0.0
+      | time < firstVerseStarts = calcSlope singingStarts 0.0 firstVerseStarts 1.0 time
+      | otherwise = 1.0
+  in
+    gain_' (show onset <> show v <> show note <> "gain") (gmult * (maybe 1.0 (\x -> bindBetween 0.0 1.0 $ calcSlope x 1.0 (x + 0.4) 0.0 time) interruptedAt))
+      ( playBufT_ (show onset <> show v <> show note <> "buf") (show v <> show note)
+          defaultParam
+            { param = 1.0
+            , timeOffset = if time < onset then onset - time else 0.0
+            }
+      )
 
 fluteNotes = Fn0 : Fn1 : Fn2 : Fn3 : Fn4 : Fn5 : Fn6 : Fn7 : Fn8 : Fn9 : Fn10 : Fn11 : Fn12 : Fn13 : Fn14 : Fn15 : Fn16 : Fn17 : Fn18 : Fn19 : Nil :: List FluteNote
 
@@ -1010,7 +1030,7 @@ env e =
 
     bvCoords = backgroundVideoCoords e.canvas.w e.canvas.h e.time
 
-    isBackgroundVideoTocuhed = isRectangleTouched (map snd touches) <<< bvCoords
+    isBackgroundVideoTocuhed = if e.time < touchableStarts then const false else isRectangleTouched (map snd touches) <<< bvCoords
 
     activeBackgroundEvents =
       memoize \v ->
@@ -1065,20 +1085,23 @@ env e =
 
     -- for the synth, we also count ongoing touches
     isSynthTouched =
-      ( case _ of
-          Nothing -> false
-          Just x ->
-            isRectangleTouched
-              ( map snd
-                  ( touches
-                      <> L.filter
-                          (\(Tuple a _) -> a `member` e.accumulator.prevClicks)
-                          e.interactions
-                  )
-              )
-              x
-      )
-        <<< sCoords
+      if e.time < touchableStarts then
+        const false
+      else
+        ( case _ of
+            Nothing -> false
+            Just x ->
+              isRectangleTouched
+                ( map snd
+                    ( touches
+                        <> L.filter
+                            (\(Tuple a _) -> a `member` e.accumulator.prevClicks)
+                            e.interactions
+                    )
+                )
+                x
+        )
+          <<< sCoords
 
     activeSynthEvents =
       memoize \v ->
@@ -1109,28 +1132,45 @@ env e =
     fCoords = fluteCoords e.canvas.w e.canvas.h e.time
 
     isFluteTouched =
-      ( case _ of
-          Nothing -> false
-          Just x -> isRectangleTouched (map snd touches) x
-      )
-        <<< fCoords
+      if e.time < touchableStarts then
+        const false
+      else
+        ( case _ of
+            Nothing -> false
+            Just x -> isRectangleTouched (map snd touches) x
+        )
+          <<< fCoords
 
     fluteHistory = modFluteHistory isFluteTouched e.accumulator.fluteHistory e.time fluteNotes
+
+    fadeIn
+      | e.time < singingStarts = filled (fillColor (rgb 0 0 0)) (rectangle 0.0 0.0 e.canvas.w e.canvas.h)
+      | e.time < firstVerseStarts = filled (fillColor (rgba 0 0 0 (calcSlope singingStarts 1.0 firstVerseStarts 0.0 e.time))) (rectangle 0.0 0.0 e.canvas.w e.canvas.h)
+      | otherwise = mempty
+
+    fadeOut
+      | e.time < thirdVerseEnds = mempty
+      | e.time < pieceEnds = filled (fillColor (rgba 0 0 0 (calcSlope thirdVerseEnds 0.0 pieceEnds 1.0 e.time))) (rectangle 0.0 0.0 e.canvas.w e.canvas.h)
+      | otherwise = filled (fillColor (rgb 0 0 0)) (rectangle 0.0 0.0 e.canvas.w e.canvas.h)
+
+    snowResizeInfo = resizeVideo snowWidth snowHeight e.canvas.w e.canvas.h
+
+    snow = drawImageFull (FromVideo { name: "snow", currentTime: Just $ e.time % snowVideoLen }) snowResizeInfo.x snowResizeInfo.y snowResizeInfo.sWidth snowResizeInfo.sHeight 0.0 0.0 e.canvas.w e.canvas.h
   in
     { audio:
-        speaker
-          $ toNel
-              ( (fold $ map _.a backgroundRenderingInfo)
-                  <> L.catMaybes (map _.a synthRenderingInfo)
-                  <> bellsToAudio bells e.time
-                  <> pure (fluteHistoryToAudioUnit fluteHistory e.time)
-              )
+        (fold $ map _.a backgroundRenderingInfo)
+          <> L.catMaybes (map _.a synthRenderingInfo)
+          <> bellsToAudio bells e.time
+          <> pure (fluteHistoryToAudioUnit fluteHistory e.time)
     , visual:
         fold
           ( fold (map _.v backgroundRenderingInfo)
               : fold (L.catMaybes (map _.v synthRenderingInfo))
               : bellsToVisual bells e.time
               : fold (fluteHistoryToVideo fCoords fluteHistory e.time)
+              : fadeIn
+              : snow
+              : fadeOut
               : Nil
           )
     , accumulator:
@@ -1151,7 +1191,7 @@ scene inter acc (CanvasInfo { w, h }) time = go <$> interactionLog inter
   where
   go { interactions } =
     AV
-      { audio: Just audio
+      { audio: Just (speaker (playBuf_ "backgroundWind" "backgroundWind" 1.0 :| audio))
       , visual:
           Just
             { painting: \_ -> visual
