@@ -35,7 +35,7 @@ import Effect (Effect)
 import Effect.Now (now)
 import Effect.Ref as Ref
 import FRP.Behavior (Behavior, behavior)
-import FRP.Behavior.Audio (AV(..), AudioUnit, CanvasInfo(..), EngineInfo, defaultExporter, defaultParam, gain_', playBufT_, playBuf_, runInBrowser_, speaker)
+import FRP.Behavior.Audio (AV(..), AudioUnit, CanvasInfo(..), EngineInfo, defaultExporter, defaultParam, gain_', pannerMono_, playBufT_, playBuf_, runInBrowser_, sinOsc_, speaker)
 import FRP.Event (Event, makeEvent, subscribe)
 import Graphics.Canvas (Rectangle)
 import Graphics.Drawing (Color, Point)
@@ -845,7 +845,17 @@ synthEventToVideo v energy a =
     (rectangle a.x a.y a.width a.height)
 
 synthEventToAudio :: SynthVoice -> Number -> SynthEventInfo -> AudioUnit D2
-synthEventToAudio v time evt = mempty
+synthEventToAudio v time evt =
+  let
+    maxG = synthVoiceOtMaxGain v
+
+    mult = synthVoiceOtMult v
+
+    freq = synthNoteBase evt.note
+
+    dist = synthNoteOvertoneDistortion evt.note
+  in
+    pannerMono_ (show v <> "pan") 0.0 (gain_' (show v <> "gain") (bindBetween 0.0 maxG (calcSlope 0.0 0.0 3.0 maxG evt.energy)) (sinOsc_ (show v <> "osc") (freq * mult * (dist `pow` mult))))
 
 midiToMult :: Number -> Number
 midiToMult n = 2.0 `pow` ((60.0 - n) / 12.0)
@@ -1343,6 +1353,11 @@ data SynthVoice
   | Sv10
   | Sv11
 
+derive instance synthVoiceGeneric :: Generic SynthVoice _
+
+instance synthVoiceShow :: Show SynthVoice where
+  show = genericShow
+
 data RGB
   = RGB Int Int Int
 
@@ -1439,6 +1454,75 @@ instance memoizableSynthVoice :: Memoizable SynthVoice SynthVoice' where
   functionize (SynthVoice' { sv9 }) Sv9 = sv9
   functionize (SynthVoice' { sv10 }) Sv10 = sv10
   functionize (SynthVoice' { sv11 }) Sv11 = sv11
+
+synthVoiceOtMult :: SynthVoice -> Number
+synthVoiceOtMult v = case v of
+  Sv0 -> 1.0
+  Sv1 -> 2.0
+  Sv2 -> 3.0
+  Sv3 -> 4.0
+  Sv4 -> 5.0
+  Sv5 -> 6.0
+  Sv6 -> 7.0
+  Sv7 -> 8.0
+  Sv8 -> 9.0
+  Sv9 -> 10.0
+  Sv10 -> 11.0
+  Sv11 -> 12.0
+
+synthVoiceOtMaxGain :: SynthVoice -> Number
+synthVoiceOtMaxGain v = case v of
+  Sv0 -> 0.3
+  Sv1 -> 0.22
+  Sv2 -> 0.2
+  Sv3 -> 0.16
+  Sv4 -> 0.13
+  Sv5 -> 0.1
+  Sv6 -> 0.08
+  Sv7 -> 0.07
+  Sv8 -> 0.05
+  Sv9 -> 0.05
+  Sv10 -> 0.04
+  Sv11 -> 0.03
+
+midi2cps :: Number -> Number
+midi2cps n = 440.0 * (2.0 `pow` ((68.0 - n) / 12.0))
+
+synthNoteBase :: SynthNote -> Number
+synthNoteBase v = case v of
+  Sn0 -> midi2cps 20.0
+  Sn1 -> midi2cps 20.0
+  Sn2 -> midi2cps 20.0
+  Sn3 -> midi2cps 20.0
+  Sn4 -> midi2cps 20.0
+  Sn5 -> midi2cps 20.0
+  Sn6 -> midi2cps 20.0
+  Sn7 -> midi2cps 20.0
+  Sn8 -> midi2cps 20.0
+  Sn9 -> midi2cps 20.0
+  Sn10 -> midi2cps 20.0
+  Sn11 -> midi2cps 20.0
+  Sn12 -> midi2cps 20.0
+  Sn13 -> midi2cps 20.0
+  Sn14 -> midi2cps 20.0
+
+synthNoteOvertoneDistortion :: SynthNote -> Number
+synthNoteOvertoneDistortion v = case v of
+  Sn0 -> 1.0
+  Sn1 -> 1.0
+  Sn2 -> 1.0
+  Sn3 -> 1.0
+  Sn4 -> 1.0
+  Sn5 -> 1.0
+  Sn6 -> 1.0
+  Sn7 -> 1.03
+  Sn8 -> 0.98
+  Sn9 -> 1.05
+  Sn10 -> 0.96
+  Sn11 -> 1.08
+  Sn12 -> 1.1
+  Sn13 -> 1.11
+  Sn14 -> 1.12
 
 data SynthNote
   = Sn0 -- I'm holding very tight.
