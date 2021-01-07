@@ -913,8 +913,44 @@ backgroundEventsToAudio v time { onset, interruptedAt, note } =
 
 fluteNotes = Fn0 : Fn1 : Fn2 : Fn3 : Fn4 : Fn5 : Fn6 : Fn7 : Fn8 : Fn9 : Fn10 : Fn11 : Fn12 : Fn13 : Fn14 : Fn15 : Fn16 : Fn17 : Fn18 : Fn19 : Nil :: List FluteNote
 
-fluteHistoryToAudioUnit :: List FluteAccumulatorInfo -> Number -> AudioUnit D2
-fluteHistoryToAudioUnit l time = mempty
+type FluteHistoryIntermediaryCalc
+  = { fac :: Number, note :: FluteNote, noteAsNumber :: Number }
+
+type FluteHistoryIntermediaryCalcHolder
+  = { sum :: Number, res :: List FluteHistoryIntermediaryCalc, minTime :: Number }
+
+fluteHistoryToAudioUnit :: List FluteAccumulatorInfo -> Number -> Maybe (AudioUnit D2)
+fluteHistoryToAudioUnit Nil time = Nothing
+
+fluteHistoryToAudioUnit l@(a : b) time =
+  let
+    { sum, res, minTime } = go l { sum: 0.0, res: Nil, minTime: a.onset }
+
+    pitchAsFloat = pitchInfo sum res 0.0
+  in
+    mempty
+  where
+  pitchInfo sum Nil n = n
+
+  pitchInfo sum (a' : b') n = pitchInfo sum b' ((a'.noteAsNumber * a'.fac / sum) + n)
+
+  go Nil acc = acc
+
+  go (x : y) { sum, res } =
+    let
+      fac = 1.0 / (1.0 + (a.onset - x.onset))
+    in
+      go y
+        { sum: sum + fac
+        , res:
+            ( { fac
+              , note: x.note
+              , noteAsNumber: fluteNoteToPeriod x.note
+              }
+                : res
+            )
+        , minTime: x.onset
+        }
 
 unselectedFluteColor :: Number -> Rectangle -> FluteNote -> Gradient
 unselectedFluteColor time rect v =
@@ -1173,7 +1209,10 @@ env e =
         (fold $ map _.a backgroundRenderingInfo)
           <> L.catMaybes (map _.a synthRenderingInfo)
           <> bellsToAudio bells e.time
-          <> pure (fluteHistoryToAudioUnit fluteHistory e.time)
+          <> ( case fluteHistoryToAudioUnit fluteHistory e.time of
+                Just x -> pure x
+                Nothing -> Nil
+            )
     , visual:
         fold
           ( fold (map _.v backgroundRenderingInfo)
@@ -1580,6 +1619,29 @@ data FluteNote
   | Fn17
   | Fn18
   | Fn19
+
+fluteNote01 :: FluteNote -> Number
+fluteNote01 = case _ of
+  Fn0 -> 0.00
+  Fn1 -> 0.05
+  Fn2 -> 0.10
+  Fn3 -> 0.15
+  Fn4 -> 0.20
+  Fn5 -> 0.25
+  Fn6 -> 0.30
+  Fn7 -> 0.35
+  Fn8 -> 0.40
+  Fn9 -> 0.45
+  Fn10 -> 0.50
+  Fn11 -> 0.55
+  Fn12 -> 0.60
+  Fn13 -> 0.65
+  Fn14 -> 0.70
+  Fn15 -> 0.75
+  Fn16 -> 0.80
+  Fn17 -> 0.85
+  Fn18 -> 0.90
+  Fn19 -> 0.95
 
 derive instance fluteNoteEq :: Eq FluteNote
 
