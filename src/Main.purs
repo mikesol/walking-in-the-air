@@ -54,6 +54,52 @@ import Web.TouchEvent.TouchList as TL
 import Web.UIEvent.MouseEvent (MouseEvent)
 import Web.UIEvent.MouseEvent as ME
 
+fluteNoteToRGB :: FluteNote -> RGB
+fluteNoteToRGB fn = case fn of
+  Fn0 -> RGB 255 231 190
+  Fn1 -> RGB 246 219 198
+  Fn2 -> RGB 255 190 190
+  Fn3 -> RGB 255 179 191
+  Fn4 -> RGB 255 194 255
+  Fn5 -> RGB 225 201 248
+  Fn6 -> RGB 194 194 255
+  Fn7 -> RGB 255 219 153
+  Fn8 -> RGB 243 198 165
+  Fn9 -> RGB 255 153 153
+  Fn10 -> RGB 255 179 191
+  Fn11 -> RGB 255 153 255
+  Fn12 -> RGB 205 165 243
+  Fn13 -> RGB 153 153 255
+  Fn14 -> RGB 255 193 77
+  Fn15 -> RGB 234 154 98
+  Fn16 -> RGB 255 77 77
+  Fn17 -> RGB 255 102 128
+  Fn18 -> RGB 255 77 255
+  Fn19 -> RGB 168 98 234
+
+fluteNoteToPeriod :: FluteNote -> Number
+fluteNoteToPeriod fn = case fn of
+  Fn0 -> 0.00
+  Fn1 -> 0.05
+  Fn2 -> 0.10
+  Fn3 -> 0.15
+  Fn4 -> 0.20
+  Fn5 -> 0.25
+  Fn6 -> 0.30
+  Fn7 -> 0.35
+  Fn8 -> 0.40
+  Fn9 -> 0.45
+  Fn10 -> 0.50
+  Fn11 -> 0.55
+  Fn12 -> 0.60
+  Fn13 -> 0.65
+  Fn14 -> 0.70
+  Fn15 -> 0.75
+  Fn16 -> 0.80
+  Fn17 -> 0.85
+  Fn18 -> 0.90
+  Fn19 -> 0.95
+
 wereWalkingOnTheAirEngineInfo =
   defaultEngineInfo
     { msBetweenSamples = 40
@@ -838,11 +884,53 @@ fluteNotes = Fn0 : Fn1 : Fn2 : Fn3 : Fn4 : Fn5 : Fn6 : Fn7 : Fn8 : Fn9 : Fn10 : 
 fluteHistoryToAudioUnit :: List FluteAccumulatorInfo -> Number -> AudioUnit D2
 fluteHistoryToAudioUnit l time = mempty
 
-selectedFluteColor :: FluteNote -> Color
-selectedFluteColor v = rgba 0 0 0 0.0
+unselectedFluteColor :: Number -> Rectangle -> FluteNote -> Gradient
+unselectedFluteColor time rect v =
+  let
+    (RGB r g b) = fluteNoteToRGB v
 
-unselectedFluteColor :: FluteNote -> Color
-unselectedFluteColor v = rgba 245 0 0 0.0
+    halfX = (rect.x + rect.width) / 2.0
+  in
+    LinearGradient { x0: halfX, y0: rect.y, x1: halfX, y1: rect.height }
+      ( { color: rgb r g b
+        , position: 0.5 + 0.5 * sin (0.3 * pi * (time + fluteNoteToPeriod v))
+        }
+          : { color: rgb r g (b - 15)
+            , position: 0.5 + 0.5 * sin (0.3 * pi * (time + 0.66 + fluteNoteToPeriod v))
+            }
+          : { color: rgb (r + 15) g b
+            , position: 0.5 + 0.5 * sin (0.3 * pi * (time + 1.33 + fluteNoteToPeriod v))
+            }
+          : Nil
+      )
+
+selectedFluteColor :: Number -> Rectangle -> FluteNote -> Gradient
+selectedFluteColor time' rect v =
+  let
+    (RGB r g b) = fluteNoteToRGB v
+
+    halfX = (rect.x + rect.width) / 2.0
+
+    time = time' `pow` 2.0
+  in
+    LinearGradient { x0: halfX, y0: rect.y, x1: halfX, y1: rect.height }
+      ( { color: rgb r g b
+        , position: 0.5 + 0.5 * sin (2.3 * pi * (time + fluteNoteToPeriod v))
+        }
+          : { color: rgb 255 255 255
+            , position: 0.5 + 0.5 * sin (2.3 * pi * (time + 0.4 + fluteNoteToPeriod v))
+            }
+          : { color: rgb r g (b - 15)
+            , position: 0.5 + 0.5 * sin (2.3 * pi * (time + 0.8 + fluteNoteToPeriod v))
+            }
+          : { color: rgb 255 255 255
+            , position: 0.5 + 0.5 * sin (2.3 * pi * (time + 1.2 + fluteNoteToPeriod v))
+            }
+          : { color: rgb (r + 15) g b
+            , position: 0.5 + 0.5 * sin (2.3 * pi * (time + 1.6 + fluteNoteToPeriod v))
+            }
+          : Nil
+      )
 
 fluteHistoryToVideo :: (FluteNote -> Maybe Rectangle) -> List FluteAccumulatorInfo -> Number -> List Painting
 fluteHistoryToVideo f l time =
@@ -862,11 +950,13 @@ fluteHistoryToVideo f l time =
   go sel (Tuple fn (Just a) : b) acc =
     go sel b
       ( filled
-          ( fillColor
+          ( fillGradient
               $ ( case sel of
                     Nothing -> unselectedFluteColor
                     Just x -> if x == fn then selectedFluteColor else unselectedFluteColor
                 )
+                  time
+                  a
                   fn
           )
           (rectangle a.x a.y a.width a.height)
