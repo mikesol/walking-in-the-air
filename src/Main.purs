@@ -6,6 +6,7 @@ import Control.Comonad.Cofree (Cofree, deferCofree)
 import Control.Comonad.Cofree as Cf
 import Control.Monad.Reader (Reader, ask, runReader)
 import Control.Monad.Rec.Class (Step(..), tailRec)
+import Data.Array as A
 import Data.DateTime.Instant (unInstant)
 import Data.Either (Either(..))
 import Data.Foldable (traverse_, foldl, fold)
@@ -39,6 +40,7 @@ import FRP.Event (Event, makeEvent, subscribe)
 import Graphics.Canvas (Rectangle)
 import Graphics.Drawing (Color, Point)
 import Graphics.Painting (Gradient(..), ImageSource(..), Painting, circle, drawImageFull, fillColor, fillGradient, filled, rectangle)
+import Klank.Dev.Util (makeBuffersKeepingCache, makeVideosKeepingCache)
 import Math (pi, pow, sin, (%))
 import Type.Klank.Dev (Klank', defaultEngineInfo, klank)
 import Web.Event.EventTarget (EventListener, addEventListener, eventListener, removeEventListener)
@@ -1232,6 +1234,17 @@ main =
           }
     , exporter = defaultExporter
     , webcamCache = \_ _ -> identity
+    , buffers =
+      makeBuffersKeepingCache 20
+        ( [ Tuple "bell" "https:/", Tuple "backgroundWind" "https:/" ]
+            <> (A.fromFoldable <<< join) (map (\v -> map (\n -> let name = show v <> show n in Tuple name ("https://" <> name)) backgroundNotes) backgroundVoices)
+        )
+    , videos =
+      makeVideosKeepingCache 20
+        ( [ Tuple "snow" "https:/"
+          ]
+            <> (A.fromFoldable <<< join) (map (\v -> map (\n -> let name = show v <> show n in Tuple name ("https://" <> name)) backgroundNotes) backgroundVoices)
+        )
     }
 
 data BackgroundVoice
@@ -1288,6 +1301,9 @@ instance backgroundVoiceShow :: Show BackgroundVoice where
 
 backgroundVoices :: List BackgroundVoice
 backgroundVoices = Bv0 : Bv1 : Bv2 : Bv3 : Bv4 : Bv5 : Bv6 : Bv7 : Nil
+
+backgroundNotes :: List BackgroundNote
+backgroundNotes = Nt0 : Nt1 : Nt2 : Nt3 : Nt4 : Nt5 : Nt6 : Nt7 : Nt8 : Nt9 : Nt10 : Nt11 : Nt12 : Nt13 : Nil
 
 synthVoices :: List SynthVoice
 synthVoices = Sv0 : Sv1 : Sv2 : Sv3 : Sv4 : Sv5 : Sv6 : Sv7 : Sv8 : Sv9 : Sv10 : Sv11 : Nil
