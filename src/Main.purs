@@ -1291,14 +1291,15 @@ main =
     , webcamCache = \_ _ -> identity
     , buffers =
       makeBuffersKeepingCache 20
-        ( [ Tuple "bell" "https:/", Tuple "backgroundWind" "https:/" ]
-            <> (A.fromFoldable <<< join) (map (\v -> map (\n -> let name = show v <> show n in Tuple name ("https://" <> name)) backgroundNotes) backgroundVoices)
+        ( [ Tuple "bell" "https://freesound.org/data/previews/439/439616_737466-hq.mp3", Tuple "backgroundWind" "https://freesound.org/data/previews/244/244942_263745-lq.mp3" ]
+            <> (A.fromFoldable <<< join) (map (\v -> map (\n -> let name = show v <> show n in Tuple name ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/fake/" <> name <> ".ogg")) backgroundNotes) backgroundVoices)
         )
+    -- courtesy of <a href="https://www.freestock.com/free-videos/loop-animation-falling-snowflakes-alpha-matte-3102526">Image used under license from Freestock.com</a>
     , videos =
       makeVideosKeepingCache 20
-        ( [ Tuple "snow" "https:/"
+        ( [ Tuple "snow" "https://klank-share.s3-eu-west-1.amazonaws.com/wwia/fake/freestock_3102526.webm"
           ]
-            <> (A.fromFoldable <<< join) (map (\v -> map (\n -> let name = show v <> show n in Tuple name ("https://" <> name)) backgroundNotes) backgroundVoices)
+            <> (A.fromFoldable <<< join) (map (\v -> map (\n -> let name = show v <> show n in Tuple name ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/fake/" <> name <> ".webm")) backgroundNotes) backgroundVoices)
         )
     }
 
