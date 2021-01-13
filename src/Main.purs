@@ -40,7 +40,7 @@ import FRP.Event (Event, makeEvent, subscribe)
 import Graphics.Canvas (Rectangle)
 import Graphics.Drawing (Color, Point)
 import Graphics.Painting (Gradient(..), ImageSource(..), Painting, circle, drawImageFull, fillColor, fillGradient, filled, rectangle)
-import Klank.Dev.Util (makeBuffersKeepingCache, makeVideosKeepingCache)
+import Klank.Dev.Util (makeBuffersKeepingCache, makeImagesKeepingCache, makeVideosKeepingCache)
 import Math (pi, pow, sin, (%))
 import Type.Klank.Dev (Klank', defaultEngineInfo, klank)
 import Web.Event.EventTarget (EventListener, addEventListener, eventListener, removeEventListener)
@@ -1209,7 +1209,9 @@ env e =
 
     snowResizeInfo = resizeVideo snowWidth snowHeight e.canvas.w e.canvas.h
 
-    snow = drawImageFull (FromVideo { name: "snow", currentTime: Just $ e.time % snowVideoLen }) snowResizeInfo.x snowResizeInfo.y snowResizeInfo.sWidth snowResizeInfo.sHeight 0.0 0.0 e.canvas.w e.canvas.h
+    snow = mempty
+  -- snow = drawImageFull (FromImage { name: "snow1" }) snowResizeInfo.x snowResizeInfo.y snowResizeInfo.sWidth snowResizeInfo.sHeight 0.0 0.0 e.canvas.w e.canvas.h
+  --snow = drawImageFull (FromVideo { name: "snow", currentTime: Just $ e.time % snowVideoLen }) snowResizeInfo.x snowResizeInfo.y snowResizeInfo.sWidth snowResizeInfo.sHeight 0.0 0.0 e.canvas.w e.canvas.h
   in
     { audio:
         (fold $ map _.a backgroundRenderingInfo)
@@ -1297,8 +1299,7 @@ main =
     -- courtesy of <a href="https://www.freestock.com/free-videos/loop-animation-falling-snowflakes-alpha-matte-3102526">Image used under license from Freestock.com</a>
     , videos =
       makeVideosKeepingCache 20
-        ( [ Tuple "snow" "https://klank-share.s3-eu-west-1.amazonaws.com/wwia/fake/freestock_3102526.webm"
-          ]
+        ( []
             <> (A.fromFoldable <<< join) (map (\v -> map (\n -> let name = show v <> show n in Tuple name ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/fake/" <> name <> ".webm")) backgroundNotes) backgroundVoices)
         )
     }
