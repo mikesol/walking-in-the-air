@@ -114,9 +114,9 @@ kr = (toNumber wereWalkingOnTheAirEngineInfo.msBetweenSamples) / 1000.0 :: Numbe
 
 nFrames = 1560 :: Int -- 165 :: Int
 
-fullVideoWidth = 840.0 :: Number
+fullVideoWidth = 600.0 :: Number
 
-fullVideoHeight = 480.0 :: Number
+fullVideoHeight = 600.0 :: Number
 
 videoWidth = fullVideoWidth / 3.0 :: Number
 
@@ -1340,63 +1340,6 @@ toTime bn i = x + (toNumber i / 30.0)
     Nt12 -> 24.0
     Nt13 -> 26.0
 
-canvasesUsingVideo :: Array (Tuple String KU.CanvasRenderInfo)
-canvasesUsingVideo =
-  A.fromFoldable
-    ( map
-        ( \o ->
-            let
-              name = show o
-            in
-              Tuple name
-                { painting:
-                    \_ ->
-                      drawImage
-                        ( FromVideo
-                            { name: "vid"
-                            , currentTime: Just $ toNumber o * kr
-                            }
-                        )
-                        0.0
-                        0.0
-                , words: Nil
-                , width: floor fullVideoWidth
-                , height: floor fullVideoHeight
-                }
-        )
-        (L.range 0 nFrames)
-    )
-
-canvasesUsingImages :: Array (Tuple String KU.CanvasInfo)
-canvasesUsingImages =
-  (A.fromFoldable <<< join <<< join)
-    ( map
-        ( \v ->
-            map
-              ( \n ->
-                  map
-                    ( \o ->
-                        let
-                          subname = show v <> show n
-
-                          name = subname <> "_" <> show o
-                        in
-                          Tuple name
-                            { images: [ Tuple "img" ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/fake/" <> name <> "/" <> show (o + 1) <> ".jpg") ]
-                            , videos: []
-                            , painting: \_ -> drawImage (FromImage { name: "img" }) 0.0 0.0
-                            , words: Nil
-                            , width: 560
-                            , height: 320
-                            }
-                    )
-                    (L.range 0 nFrames)
-              )
-              backgroundNotes
-        )
-        backgroundVoices
-    )
-
 main :: Klank' WAccumulator
 main =
   klank
@@ -1428,12 +1371,7 @@ main =
             <> (A.fromFoldable <<< join) (map (\v -> map (\n -> let name = show v <> show n in Tuple name ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/fake/" <> name <> ".ogg")) backgroundNotes) backgroundVoices)
         )
     -- courtesy of <a href="https://www.freestock.com/free-videos/loop-animation-falling-snowflakes-alpha-matte-3102526">Image used under license from Freestock.com</a>
-    , canvases =
-      makePooledCanvasesKeepingCache 20
-        { videos: [ Tuple "vid" "https://klank-share.s3-eu-west-1.amazonaws.com/wwia/fake/brady.webm" ]
-        , images: []
-        }
-        canvasesUsingVideo
+    , images = makeImagesKeepingCache 20 (map (\i -> Tuple (show i) ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/fake/bkg0/" <> show i <> ".jpg")) (A.range 1 nFrames))
     }
 
 data BackgroundVoice
@@ -1498,19 +1436,19 @@ synthVoices :: List SynthVoice
 synthVoices = Sv0 : Sv1 : Sv2 : Sv3 : Sv4 : Sv5 : Sv6 : Sv7 : Sv8 : Sv9 : Sv10 : Sv11 : Nil
 
 data BackgroundNote
-  = Nt0 -- We're walking in the air, We're floating in the moonlit
-  | Nt1 -- sky. The people far below are
-  | Nt2 -- sleeping as we fly.
-  | Nt3 -- I'm holding very tight. I'm riding in the midnight 
-  | Nt4 -- blue. I'm finding I can fly so 
-  | Nt5 -- high above with you.
-  | Nt6 -- Children gaze open mouth
-  | Nt7 -- Taken by surprise
-  | Nt8 -- Nobody down below
-  | Nt9 -- believes their eyes.
-  | Nt10 -- We're walking in the air. We're dancing in the midnight
-  | Nt11 -- sky. And everyone who sees us
-  | Nt12 -- greets us as we fly.
+  = Nt0 -- We're walking in the air, We're floating in the moonlit :: In The Air
+  | Nt1 -- sky. The people far below are ::  Far Be Low
+  | Nt2 -- sleeping as we fly. :: As We Fly
+  | Nt3 -- I'm holding very tight. I'm riding in the midnight :: Hol Ding Tight
+  | Nt4 -- blue. I'm finding I can fly so :: I can fly
+  | Nt5 -- high above with you. :: High A Bove
+  | Nt6 -- Children gaze open mouth :: Chil Dren Gaze
+  | Nt7 -- Taken by surprise  :: Ta Ken By
+  | Nt8 -- Nobody down below :: No Bo Dy
+  | Nt9 -- believes their eyes. :: Be Lieve Their Eyes
+  | Nt10 -- We're walking in the air. We're dancing in the midnight :: In The Air
+  | Nt11 -- sky. And everyone who sees us :: Ev 'Ry One
+  | Nt12 -- greets us as we fly. :: As We Fly
   | Nt13 -- [end]
 
 derive instance backgroundNoteGeneric :: Generic BackgroundNote _
