@@ -39,8 +39,9 @@ import FRP.Behavior.Audio (AV(..), AudioUnit, CanvasInfo(..), EngineInfo, defaul
 import FRP.Event (Event, makeEvent, subscribe)
 import Graphics.Canvas (Rectangle)
 import Graphics.Drawing (Color, Point)
-import Graphics.Painting (Gradient(..), ImageSource(..), Painting, circle, drawImageFull, fillColor, fillGradient, filled, rectangle)
-import Klank.Dev.Util (makeBuffersKeepingCache, makeImagesKeepingCache, makeVideosKeepingCache)
+import Graphics.Painting (Gradient(..), ImageSource(..), Painting, circle, drawImage, drawImageFull, fillColor, fillGradient, filled, rectangle)
+import Klank.Dev.Util (makeBuffersKeepingCache, makeCanvasesKeepingCache, makeImagesKeepingCache, makePooledCanvasesKeepingCache, makeVideosKeepingCache)
+import Klank.Dev.Util as KU
 import Math (pi, pow, sin, (%))
 import Type.Klank.Dev (Klank', defaultEngineInfo, klank)
 import Web.Event.EventTarget (EventListener, addEventListener, eventListener, removeEventListener)
@@ -104,17 +105,27 @@ fluteNoteToPeriod fn = case fn of
 
 wereWalkingOnTheAirEngineInfo =
   defaultEngineInfo
-    { msBetweenSamples = 40
-    , msBetweenPings = 35
+    { msBetweenSamples = 50
+    , msBetweenPings = 45
     } ::
     EngineInfo
 
 kr = (toNumber wereWalkingOnTheAirEngineInfo.msBetweenSamples) / 1000.0 :: Number
 
-videoWidth = 320.0 :: Number
+nFrames = 1560 :: Int -- 165 :: Int
 
-videoHeight = 320.0 :: Number
+fullVideoWidth = 840.0 :: Number
 
+fullVideoHeight = 480.0 :: Number
+
+videoWidth = fullVideoWidth / 3.0 :: Number
+
+videoHeight = fullVideoHeight / 3.0 :: Number
+
+backgroundFps = 20.0 :: Number
+
+--videoWidth = 768.0 :: Number
+--videoHeight = 512.0 :: Number
 snowWidth = 1000.0 :: Number
 
 snowHeight = 1000.0 :: Number
@@ -172,6 +183,9 @@ thirdVerseStarts = bridgeStarts + sectionLen :: Number
 thirdVerseEnds = thirdVerseStarts + sectionLen :: Number
 
 pieceEnds = thirdVerseStarts + 2.0 * measure :: Number
+
+type AudioUnitD2
+  = AudioUnit D2
 
 type ResizeInfo
   = { x :: Number
@@ -231,7 +245,7 @@ type SynthEventInfo
     }
 
 type WAccumulator
-  = { activeBackgroundEvents :: BackgroundVoice' (List BackgroundEventInfo)
+  = { backgroundEvents :: BackgroundVoice' (List BackgroundEventInfo)
     , activeSynthEvents :: SynthVoice' (Maybe SynthEventInfo)
     , bells :: List BellAccumulatorInfo
     , bellsLoop :: CofreeList (Number -> Number)
@@ -240,7 +254,7 @@ type WAccumulator
     }
 
 type RenderInfo
-  = { audio :: List (AudioUnit D2)
+  = { audio :: List AudioUnitD2
     , visual :: Painting
     , accumulator :: WAccumulator
     }
@@ -488,31 +502,35 @@ interpolateRectangles n0 n1 t r0 r1 =
   }
 
 backgroundVideoCoords :: Number -> Number -> Number -> BackgroundVoice -> Rectangle
-backgroundVideoCoords w h n v
-  | n < secondVerseStarts = normalPositions w h v
-  | n < instrumentsFullyFadedIn =
-    interpolateRectangles
-      secondVerseStarts
-      instrumentsFullyFadedIn
-      n
-      (normalPositions w h v)
-      (positionsWithRoomForInstruments w h v)
-  | n < instrumentsStartFadingOut = positionsWithRoomForInstruments w h v
-  | n < thirdVerseStarts =
-    interpolateRectangles
-      instrumentsStartFadingOut
-      thirdVerseStarts
-      n
-      (positionsWithRoomForInstruments w h v)
-      (normalPositions w h v)
-  | n < fluteFullyFadedIn =
-    interpolateRectangles
-      thirdVerseStarts
-      fluteFullyFadedIn
-      n
-      (normalPositions w h v)
-      (positionsWithRoomForFlute w h v)
-  | otherwise = positionsWithRoomForFlute w h v
+backgroundVideoCoords w h n v = f'
+  where
+  f' = normalPositions w h v
+
+  f
+    | n < secondVerseStarts = normalPositions w h v
+    | n < instrumentsFullyFadedIn =
+      interpolateRectangles
+        secondVerseStarts
+        instrumentsFullyFadedIn
+        n
+        (normalPositions w h v)
+        (positionsWithRoomForInstruments w h v)
+    | n < instrumentsStartFadingOut = positionsWithRoomForInstruments w h v
+    | n < thirdVerseStarts =
+      interpolateRectangles
+        instrumentsStartFadingOut
+        thirdVerseStarts
+        n
+        (positionsWithRoomForInstruments w h v)
+        (normalPositions w h v)
+    | n < fluteFullyFadedIn =
+      interpolateRectangles
+        thirdVerseStarts
+        fluteFullyFadedIn
+        n
+        (normalPositions w h v)
+        (positionsWithRoomForFlute w h v)
+    | otherwise = positionsWithRoomForFlute w h v
 
 type SynthDims
   = { oneSixthW :: Number
@@ -798,6 +816,9 @@ toNel Nil = mempty :| Nil
 
 toNel (a : b) = a :| b
 
+timeToBackgroundFrame :: BackgroundNote -> Number -> Int
+timeToBackgroundFrame _ n = max 0 (min (nFrames - 1) (floor (n * backgroundFps)))
+
 fluteCoords :: Number -> Number -> Number -> FluteNote -> Maybe Rectangle
 fluteCoords w h n v
   | n < thirdVerseStarts = Nothing
@@ -818,23 +839,27 @@ bindBetween :: Number -> Number -> Number -> Number
 bindBetween mn mx n = max mn (min mx n)
 
 backgroundEventsToVideo :: BackgroundVoice -> (BackgroundVoice -> Rectangle) -> List BackgroundEventInfo -> Number -> Painting
-backgroundEventsToVideo v bvCoords evts time =
-  listAsNel mempty
-    ( \(NonEmpty a b) ->
-        let
-          currentEvent = foldl (\q r -> if q.onset > r.onset then q else r) a evts
+backgroundEventsToVideo v bvCoords Nil time = mempty
 
-          videoCoords = bvCoords v
+backgroundEventsToVideo v bvCoords (a : _) time =
+  let
+    currentEvent = a
 
-          whRatio = videoCoords.width / videoCoords.height
+    videoCoords = bvCoords v
 
-          wcrop = if whRatio > 1.0 then videoWidth else whRatio * videoHeight
+    whRatio = videoCoords.width / videoCoords.height
 
-          resizeInfo = resizeVideo videoWidth videoHeight videoCoords.width videoCoords.height
-        in
-          drawImageFull (FromVideo { name: show v <> show currentEvent.note, currentTime: Just $ time - currentEvent.onset }) resizeInfo.x resizeInfo.y resizeInfo.sWidth resizeInfo.sHeight videoCoords.x videoCoords.y videoCoords.width videoCoords.height
-    )
-    evts
+    wcrop = if whRatio > 1.0 then videoWidth else whRatio * videoHeight
+
+    resizeInfo = resizeVideo videoWidth videoHeight videoCoords.width videoCoords.height
+
+    -- img = FromVideo { name: show v <> show currentEvent.note, currentTime: Just $ time - currentEvent.onset }
+    img = FromImage { name: show (timeToBackgroundFrame currentEvent.note (time - currentEvent.onset)) }
+
+    -- out = drawImage img' 0.0 0.0
+    out = drawImageFull img (resizeInfo.x + (voiceToWidth v)) (resizeInfo.y + (voiceToHeight v)) resizeInfo.sWidth resizeInfo.sHeight videoCoords.x videoCoords.y videoCoords.width videoCoords.height
+  in
+    out
 
 synthEventToVideo :: SynthVoice -> Number -> Rectangle -> Painting
 synthEventToVideo v energy a =
@@ -844,7 +869,7 @@ synthEventToVideo v energy a =
     )
     (rectangle a.x a.y a.width a.height)
 
-synthEventToAudio :: SynthVoice -> Number -> SynthEventInfo -> AudioUnit D2
+synthEventToAudio :: SynthVoice -> Number -> SynthEventInfo -> AudioUnitD2
 synthEventToAudio v time evt =
   let
     maxG = synthVoiceOtMaxGain v
@@ -883,7 +908,7 @@ bellsToVisual l time = fold $ map go l
     in
       filled (fillColor $ rgba 0 0 0 opacity) (circle bell.x bell.y bell.r)
 
-bellsToAudio :: List BellAccumulatorInfo -> Number -> List (AudioUnit D2)
+bellsToAudio :: List BellAccumulatorInfo -> Number -> List AudioUnitD2
 bellsToAudio l time = go l Nil
   where
   go Nil acc = acc
@@ -895,21 +920,29 @@ bellsToAudio l time = go l Nil
           Just x -> playBuf_ ("bell" <> show x <> show a.pitch) "bell" (midiToMult a.pitch) : acc
       )
 
-backgroundEventsToAudio :: BackgroundVoice -> Number -> BackgroundEventInfo -> AudioUnit D2
-backgroundEventsToAudio v time { onset, interruptedAt, note } =
-  let
-    gmult
-      | time < singingStarts = 0.0
-      | time < firstVerseStarts = calcSlope singingStarts 0.0 firstVerseStarts 1.0 time
-      | otherwise = 1.0
-  in
-    gain_' (show onset <> show v <> show note <> "gain") (gmult * (maybe 1.0 (\x -> bindBetween 0.0 1.0 $ calcSlope x 1.0 (x + 0.4) 0.0 time) interruptedAt))
-      ( playBufT_ (show onset <> show v <> show note <> "buf") (show v <> show note)
-          defaultParam
-            { param = 1.0
-            , timeOffset = if time < onset then onset - time else 0.0
-            }
-      )
+backgroundEventsToAudio :: BackgroundVoice -> Number -> List BackgroundEventInfo -> List AudioUnitD2
+backgroundEventsToAudio v time l = go l
+  where
+  go ({ onset, interruptedAt, note } : b)
+    | onset + 2.0 * measure < time = Nil
+    | otherwise =
+      let
+        gmult
+          | time < singingStarts = 0.0
+          | time < firstVerseStarts = calcSlope singingStarts 0.0 firstVerseStarts 1.0 time
+          | otherwise = 1.0
+      in
+        ( gain_' (show onset <> show v <> show note <> "gain") (gmult * (maybe 1.0 (\x -> bindBetween 0.0 1.0 $ calcSlope x 1.0 (x + 0.4) 0.0 time) interruptedAt))
+            ( playBufT_ (show onset <> show v <> show note <> "buf") (show v <> show note)
+                defaultParam
+                  { param = 1.0
+                  , timeOffset = if time < onset then onset - time else 0.0
+                  }
+            )
+        )
+          : go b
+
+  go Nil = mempty
 
 fluteNotes = Fn0 : Fn1 : Fn2 : Fn3 : Fn4 : Fn5 : Fn6 : Fn7 : Fn8 : Fn9 : Fn10 : Fn11 : Fn12 : Fn13 : Fn14 : Fn15 : Fn16 : Fn17 : Fn18 : Fn19 : Nil :: List FluteNote
 
@@ -921,7 +954,7 @@ type FluteHistoryIntermediaryCalcHolder
 
 fluteGain = 0.2 :: Number
 
-fluteHistoryToAudioUnit :: List FluteAccumulatorInfo -> Number -> Maybe (AudioUnit D2)
+fluteHistoryToAudioUnit :: List FluteAccumulatorInfo -> Number -> Maybe AudioUnitD2
 fluteHistoryToAudioUnit Nil time = Nothing
 
 fluteHistoryToAudioUnit l@(a : b) time =
@@ -1086,50 +1119,43 @@ env e =
 
     isBackgroundVideoTocuhed = if e.time < touchableStarts then const false else isRectangleTouched (map snd touches) <<< bvCoords
 
-    activeBackgroundEvents =
+    backgroundEvents =
       memoize \v ->
         let
-          prevEvents = functionize e.accumulator.activeBackgroundEvents v
+          prevEvents = functionize e.accumulator.backgroundEvents v
 
           isTouched = isBackgroundVideoTocuhed v
 
-          filteredEvents = L.filter (\{ onset } -> onset + 2.0 * measure + backgroundOverhang < e.time) prevEvents
+          maxT = maybe 0.0 _.onset (L.head prevEvents)
 
-          maxT = foldl (\a { onset } -> max a onset) 0.0 filteredEvents
+          rv
+            | isTouched =
+              { onset: e.time
+              , interruptedAt: Nothing
+              , note: backgroundNoteAt e.time
+              }
+                : case prevEvents of
+                    Nil -> Nil
+                    (a : b) -> case a.interruptedAt of
+                      Just x -> (a : b)
+                      Nothing -> (a { interruptedAt = Just e.time } : b)
+            | maxT + 2.0 * measure < e.time - kr =
+              { onset: maxT + 2.0 * measure
+              , interruptedAt: Nothing
+              , note: backgroundNoteAt e.time
+              }
+                : prevEvents
+            | otherwise = prevEvents
         in
-          ( ( if isTouched then
-                pure
-                  { onset: e.time
-                  , interruptedAt: Nothing
-                  , note: backgroundNoteAt e.time
-                  }
-              else
-                Nil
-            )
-              <> ( if (not isTouched) && maxT + 2.0 * measure > (e.time - kr) then
-                    pure
-                      { onset: maxT + 2.0 * measure
-                      , interruptedAt: Nothing
-                      , note: backgroundNoteAt e.time
-                      }
-                  else
-                    Nil
-                )
-              <> over (traversed <<< prop (SProxy :: SProxy "interruptedAt"))
-                  ( case _ of
-                      Just x -> Just x
-                      Nothing -> if isTouched then Just e.time else Nothing
-                  )
-                  filteredEvents
-          )
+          rv
 
     backgroundRenderingInfo =
       map
         ( \v ->
             let
-              evts = functionize activeBackgroundEvents v
+              evts = functionize backgroundEvents v
             in
-              { a: map (backgroundEventsToAudio v e.time) evts
+              { a: backgroundEventsToAudio v e.time evts
               , v: backgroundEventsToVideo v bvCoords evts e.time
               }
         )
@@ -1224,16 +1250,22 @@ env e =
     , visual:
         fold
           ( fold (map _.v backgroundRenderingInfo)
-              : fold (L.catMaybes (map _.v synthRenderingInfo))
-              : bellsToVisual bells e.time
-              : fold (fluteHistoryToVideo fCoords fluteHistory e.time)
-              : fadeIn
-              : snow
-              : fadeOut
+              -- : fold (L.catMaybes (map _.v synthRenderingInfo))
+              
+              -- : bellsToVisual bells e.time
+              
+              -- : fold (fluteHistoryToVideo fCoords fluteHistory e.time)
+              
+              -- : fadeIn
+              
+              -- : snow
+              
+              -- : fadeOut
+              
               : Nil
           )
     , accumulator:
-        { activeBackgroundEvents
+        { backgroundEvents
         , activeSynthEvents
         , bells
         , bellsLoop
@@ -1267,14 +1299,113 @@ scene inter acc (CanvasInfo { w, h }) time = go <$> interactionLog inter
         , canvas: { w, h }
         }
 
+voiceToWidth :: BackgroundVoice -> Number
+voiceToWidth bv = case bv of
+  Bv0 -> 0.0
+  Bv1 -> videoWidth
+  Bv2 -> videoWidth * 2.0
+  Bv3 -> 0.0
+  Bv4 -> videoWidth * 2.0
+  Bv5 -> 0.0
+  Bv6 -> videoWidth
+  Bv7 -> videoWidth * 2.0
+
+voiceToHeight :: BackgroundVoice -> Number
+voiceToHeight bv = case bv of
+  Bv0 -> 0.0
+  Bv1 -> 0.0
+  Bv2 -> 0.0
+  Bv3 -> videoHeight
+  Bv4 -> videoHeight
+  Bv5 -> videoHeight * 2.0
+  Bv6 -> videoHeight * 2.0
+  Bv7 -> videoHeight * 2.0
+
+toTime :: BackgroundNote -> Int -> Number
+toTime bn i = x + (toNumber i / 30.0)
+  where
+  x = case bn of
+    Nt0 -> 0.0
+    Nt1 -> 2.0
+    Nt2 -> 4.0
+    Nt3 -> 6.0
+    Nt4 -> 8.0
+    Nt5 -> 10.0
+    Nt6 -> 12.0
+    Nt7 -> 14.0
+    Nt8 -> 16.0
+    Nt9 -> 18.0
+    Nt10 -> 20.0
+    Nt11 -> 22.0
+    Nt12 -> 24.0
+    Nt13 -> 26.0
+
+canvasesUsingVideo :: Array (Tuple String KU.CanvasRenderInfo)
+canvasesUsingVideo =
+  A.fromFoldable
+    ( map
+        ( \o ->
+            let
+              name = show o
+            in
+              Tuple name
+                { painting:
+                    \_ ->
+                      drawImage
+                        ( FromVideo
+                            { name: "vid"
+                            , currentTime: Just $ toNumber o * kr
+                            }
+                        )
+                        0.0
+                        0.0
+                , words: Nil
+                , width: floor fullVideoWidth
+                , height: floor fullVideoHeight
+                }
+        )
+        (L.range 0 nFrames)
+    )
+
+canvasesUsingImages :: Array (Tuple String KU.CanvasInfo)
+canvasesUsingImages =
+  (A.fromFoldable <<< join <<< join)
+    ( map
+        ( \v ->
+            map
+              ( \n ->
+                  map
+                    ( \o ->
+                        let
+                          subname = show v <> show n
+
+                          name = subname <> "_" <> show o
+                        in
+                          Tuple name
+                            { images: [ Tuple "img" ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/fake/" <> name <> "/" <> show (o + 1) <> ".jpg") ]
+                            , videos: []
+                            , painting: \_ -> drawImage (FromImage { name: "img" }) 0.0 0.0
+                            , words: Nil
+                            , width: 560
+                            , height: 320
+                            }
+                    )
+                    (L.range 0 nFrames)
+              )
+              backgroundNotes
+        )
+        backgroundVoices
+    )
+
 main :: Klank' WAccumulator
 main =
   klank
     { run = runInBrowser_ (scene <$> getInteractivity)
+    , engineInfo = \res rej -> res wereWalkingOnTheAirEngineInfo
     , accumulator =
       \res _ ->
         res
-          { activeBackgroundEvents:
+          { backgroundEvents:
               memoize
                 $ const
                     ( pure
@@ -1297,11 +1428,12 @@ main =
             <> (A.fromFoldable <<< join) (map (\v -> map (\n -> let name = show v <> show n in Tuple name ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/fake/" <> name <> ".ogg")) backgroundNotes) backgroundVoices)
         )
     -- courtesy of <a href="https://www.freestock.com/free-videos/loop-animation-falling-snowflakes-alpha-matte-3102526">Image used under license from Freestock.com</a>
-    , videos =
-      makeVideosKeepingCache 20
-        ( []
-            <> (A.fromFoldable <<< join) (map (\v -> map (\n -> let name = show v <> show n in Tuple name ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/fake/" <> name <> ".webm")) backgroundNotes) backgroundVoices)
-        )
+    , canvases =
+      makePooledCanvasesKeepingCache 20
+        { videos: [ Tuple "vid" "https://klank-share.s3-eu-west-1.amazonaws.com/wwia/fake/brady.webm" ]
+        , images: []
+        }
+        canvasesUsingVideo
     }
 
 data BackgroundVoice
