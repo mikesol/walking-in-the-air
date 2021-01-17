@@ -40,7 +40,7 @@ import FRP.Event (Event, makeEvent, subscribe)
 import Graphics.Canvas (Rectangle)
 import Graphics.Drawing (Color, Point)
 import Graphics.Painting (Gradient(..), ImageSource(..), Painting, circle, drawImage, drawImageFull, fillColor, fillGradient, filled, rectangle)
-import Klank.Dev.Util (makeBuffersKeepingCache, makeCanvasesKeepingCache, makeImagesKeepingCache, makePooledCanvasesKeepingCache, makeVideosKeepingCache)
+import Klank.Dev.Util (CanvasAsImageRenderInfo, makeBuffersKeepingCache, makeCanvasesKeepingCache, makeImagesKeepingCache, makePooledCanvasesKeepingCache, makePooledImagesFromCanvasesKeepingCache, makeVideosKeepingCache)
 import Klank.Dev.Util as KU
 import Math (pi, pow, sin, (%))
 import Type.Klank.Dev (Klank', defaultEngineInfo, klank)
@@ -112,7 +112,7 @@ wereWalkingOnTheAirEngineInfo =
 
 kr = (toNumber wereWalkingOnTheAirEngineInfo.msBetweenSamples) / 1000.0 :: Number
 
-nFrames = 1560 :: Int -- 165 :: Int
+nFrames = 1000 :: Int -- 165 :: Int
 
 fullVideoWidth = 600.0 :: Number
 
@@ -1340,6 +1340,35 @@ toTime bn i = x + (toNumber i / 30.0)
     Nt12 -> 24.0
     Nt13 -> 26.0
 
+{-
+canvasesUsingVideo :: Array (Tuple String CanvasAsImageRenderInfo)
+canvasesUsingVideo =
+  A.fromFoldable
+    ( map
+        ( \o ->
+            let
+              name = show o
+            in
+              Tuple name
+                { painting:
+                    \_ ->
+                      drawImage
+                        ( FromVideo
+                            { name: "vid"
+                            , currentTime: Just $ toNumber o * kr
+                            }
+                        )
+                        0.0
+                        0.0
+                , words: Nil
+                , width: floor fullVideoWidth
+                , height: floor fullVideoHeight
+                , quality: 0.1
+                }
+        )
+        (L.range 0 nFrames)
+    )
+-}
 main :: Klank' WAccumulator
 main =
   klank
@@ -1372,6 +1401,12 @@ main =
         )
     -- courtesy of <a href="https://www.freestock.com/free-videos/loop-animation-falling-snowflakes-alpha-matte-3102526">Image used under license from Freestock.com</a>
     , images = makeImagesKeepingCache 20 (map (\i -> Tuple (show i) ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/fake/bkg0/" <> show i <> ".jpg")) (A.range 1 nFrames))
+    --, images =
+    --  makePooledImagesFromCanvasesKeepingCache 20
+    --    { videos: [ Tuple "vid" "https://klank-share.s3-eu-west-1.amazonaws.com/wwia/fake/tvcropxLong20fps.mp4" ]
+    --    , images: []
+    --    }
+    --    canvasesUsingVideo
     }
 
 data BackgroundVoice
