@@ -12,7 +12,9 @@ You can edit this file as you like.
   , "effect"
   , "free"
   , "klank-dev-util"
+  , "node-fs"
   , "psci-support"
+  , "sunde"
   , "typelevel-klank-dev"
   , "web-touchevents"
   ]
