@@ -1419,6 +1419,11 @@ data BackgroundVoice
   | Bv6
   | Bv7
 
+derive instance backgroundVoiceGeneric :: Generic BackgroundVoice _
+
+instance backgroundVoiceShow :: Show BackgroundVoice where
+  show = genericShow
+
 newtype BackgroundVoice' a
   = BackgroundVoice'
   { bv0 :: a
@@ -1455,11 +1460,6 @@ instance memoizableBackgroundVoice :: Memoizable BackgroundVoice BackgroundVoice
   functionize (BackgroundVoice' { bv5 }) Bv5 = bv5
   functionize (BackgroundVoice' { bv6 }) Bv6 = bv6
   functionize (BackgroundVoice' { bv7 }) Bv7 = bv7
-
-derive instance backgroundVoiceGeneric :: Generic BackgroundVoice _
-
-instance backgroundVoiceShow :: Show BackgroundVoice where
-  show = genericShow
 
 backgroundVoices :: List BackgroundVoice
 backgroundVoices = Bv0 : Bv1 : Bv2 : Bv3 : Bv4 : Bv5 : Bv6 : Bv7 : Nil
