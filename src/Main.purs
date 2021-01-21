@@ -16,7 +16,7 @@ import Effect (Effect)
 import Effect.Aff (Aff, error, launchAff_, throwError)
 import Effect.Class (liftEffect)
 import Effect.Class.Console (log)
-import Klank.Dev (BackgroundNote(..), BackgroundVoice(..), backgroundNotes, backgroundVoices)
+import Klank.Dev (BackgroundNote, BackgroundVoice(..), backgroundNotes, backgroundVoices, markerToIdx, framesInSection)
 import Math ((%))
 import Node.ChildProcess (Exit(..))
 import Node.ChildProcess as CP
@@ -30,8 +30,6 @@ outdir = "z" :: String
 tempo = 60.0 :: Number
 
 frameRate = 10.0 :: Number
-
-framesInSection = floor $ frameRate * tempo * 8.0 / 60.0 :: Int
 
 videoHeight = 1920 :: Int
 
@@ -61,20 +59,20 @@ offsetDefaultMarkers =
     <<< over (prop (SProxy :: SProxy "start"))
     <<< (+)
 
-outputFrame :: Int -> Number -> String -> String -> Array String
-outputFrame yOffset seconds inputFile outputFile =
+outputFrame :: Int -> Number -> String -> String -> Boolean -> Array String
+outputFrame yOffset seconds inputFile outputFile scale =
   [ "-ss"
   , show seconds
   , "-i"
   , inputFile
   , "-vframes"
   , "1"
-  , "-q:v"
-  , "0"
   , "-filter:v"
-  , "crop=" <> show videoWidth <> ":" <> show videoWidth <> ":0:" <> show yOffset
+  , "crop=" <> show videoWidth <> ":" <> show videoWidth <> ":0:" <> show yOffset <> (if scale then ",scale=" <> show vScale <> ":" <> show vScale else mempty)
   , outputFile
   ]
+
+vScale = 200 :: Int
 
 snowGradientAt :: (Number -> Number) -> (Number -> Number) -> Number -> String -> Array String
 snowGradientAt posF rotF time outf = makeGradient end stops (floor rotC) videoWidth outf
@@ -129,15 +127,8 @@ makeGradient w colors rot realDim outf =
       , outf
       ]
 
-ffmpegSingleFrame :: String -> String -> Int -> Int -> Number -> Int -> Aff Unit
-ffmpegSingleFrame odr file v i start yOffset = do
-  let
-    args =
-      outputFrame
-        yOffset
-        (start + (toNumber i / frameRate))
-        file
-        (outJpg odr file v i)
+runFFMpeg :: Array String -> Aff Unit
+runFFMpeg args = do
   (log <<< show) args
   when (not dryRun) do
     { exit, stderr, stdout } <-
@@ -152,11 +143,37 @@ ffmpegSingleFrame odr file v i start yOffset = do
       Normally n -> throwError (error $ "Non-zero exit of ffmpeg " <> stderr <> " " <> stdout)
       _ -> throwError (error $ "Non-zero exit of ffmpeg " <> stderr <> " " <> stdout)
 
-imageMagickNoop :: String -> String -> Int -> Int -> Aff Unit
-imageMagickNoop odr file v i = do
+ffmpegSingleFrame :: String -> String -> Int -> Int -> Number -> Int -> Aff Unit
+ffmpegSingleFrame odr file v i start yOffset = do
   let
     args =
-      [ outJpg odr file v i
+      outputFrame
+        yOffset
+        (start + (toNumber i / frameRate))
+        file
+        (outJpg odr file v i)
+        false
+  runFFMpeg args
+
+ffmpegSoloFrame :: Int -> Aff Unit
+ffmpegSoloFrame i = do
+  let
+    args =
+      outputFrame
+        390
+        (toNumber i / frameRate + 3.8)
+        "media/wwia.mp4"
+        ("z/media/wwia." <> show i <> ".png")
+        true
+  runFFMpeg args
+
+imageMagickScale :: Boolean -> String -> String -> Int -> Int -> Aff Unit
+imageMagickScale fromFinal odr file v i = do
+  let
+    args =
+      [ (if fromFinal then finalJpg else outJpg) odr file v i
+      , "-scale"
+      , show vScale <> "x" <> show vScale
       , finalJpg odr file v i
       ]
   (log <<< show) args
@@ -229,23 +246,6 @@ imageMagickGradient odr file v i = do
         throwError (error $ "Non-zero exit of magick: " <> show n)
       _ -> throwError (error "Non-zero exit of magick")
 
-markerToIdx :: BackgroundNote -> Int
-markerToIdx n = case n of
-  Nt0 -> 0
-  Nt1 -> 0
-  Nt2 -> 0
-  Nt3 -> 0
-  Nt4 -> 0
-  Nt5 -> 0
-  Nt6 -> 0
-  Nt7 -> 0
-  Nt8 -> 0
-  Nt9 -> 0
-  Nt10 -> 0
-  Nt11 -> 0
-  Nt12 -> 0
-  Nt13 -> 0
-
 voices :: Voices
 voices v = case v of
   Bv0 ->
@@ -290,19 +290,20 @@ voices v = case v of
     }
 
 outJpg :: forall v i. Show v => Show i => String -> String -> v -> i -> String
-outJpg odr file v i = odr <> "/" <> file <> "." <> show v <> "." <> show i <> ".jpg"
+outJpg odr file v i = odr <> "/" <> file <> "." <> show v <> "." <> show i <> ".png"
 
 finalJpg :: forall v i. Show v => Show i => String -> String -> v -> i -> String
-finalJpg odr file v i = odr <> "/" <> file <> "." <> show v <> "." <> show i <> ".final.jpg"
+finalJpg odr file v i = odr <> "/" <> file <> "." <> show v <> "." <> show i <> ".final.png"
 
 outGrad :: forall v i. Show v => Show i => String -> String -> v -> i -> String
-outGrad odr file v i = odr <> "/" <> file <> "." <> show v <> "." <> show i <> ".gradient.jpg"
+outGrad odr file v i = odr <> "/" <> file <> "." <> show v <> "." <> show i <> ".gradient.png"
 
 endpt :: Int
 endpt = framesInSection - 1
 
 mergeVoicesAndCleanSingleFrame :: BackgroundNote -> Int -> Aff Unit
-mergeVoicesAndCleanSingleFrame b i =
+mergeVoicesAndCleanSingleFrame b i = do
+  (log <<< show) args
   when (not dryRun) do
     { exit, stderr, stdout } <-
       S.spawn
@@ -314,23 +315,26 @@ mergeVoicesAndCleanSingleFrame b i =
     case exit of
       Normally 0 -> do
         for_ finalJpgs \f -> liftEffect $ FS.unlink f
+        liftEffect $ FS.unlink wwiaFile
         pure unit
       Normally n -> throwError (error $ "Non-zero exit of ffmpeg " <> stderr <> " " <> stdout)
       _ -> throwError (error $ "Non-zero exit of ffmpeg " <> stderr <> " " <> stdout)
   where
   finalJpgs = A.fromFoldable $ map (\a -> let { file } = voices a in finalJpg outdir file (markerToIdx b) i) backgroundVoices
 
+  wwiaFile = "z/media/wwia." <> show (markerToIdx b * framesInSection + i) <> ".png"
+
   args =
     (join (map (\a -> [ "-i", a ]) finalJpgs))
       <> [ "-i"
-        , "media/hole.png"
+        , wwiaFile
         , "-filter_complex"
-        , "[0:v][1:v][2:v]hstack=inputs=3[top];[3:v][8:v][4:v]hstack=inputs=3[middle];[5:v][6:v][7:v]hstack=inputs=3[bottom];[top][middle][bottom]vstack=inputs=3[bigimg];[bigimg]scale=600:600[v]"
+        , "[0:v][1:v][2:v]hstack=inputs=3[top];[3:v][8:v][4:v]hstack=inputs=3[middle];[5:v][6:v][7:v]hstack=inputs=3[bottom];[top][middle][bottom]vstack=inputs=3[v]"
         , "-map"
         , "[v]"
         , "-q:v"
-        , "23"
-        , (show $ markerToIdx b) <> "." <> (show i) <> ".mosaic.jpg"
+        , "10"
+        , "z/" <> (show $ markerToIdx b) <> "." <> (show i) <> ".mosaic.jpg"
         ]
 
 makeSingleFrame :: BackgroundVoice -> BackgroundNote -> Int -> Aff Unit
@@ -349,19 +353,21 @@ makeSingleFrame a b i =
             let
               pct
                 | i < 20 = max 0 (min 100 (floor $ 100.0 * (toNumber (20 - i)) / 20.0))
-                | otherwise = max 0 (min 100 (floor $ 100.0 * (toNumber ((framesInSection - 1) - i + 20)) / 20.0))
+                | otherwise = max 0 (min 100 (floor $ 100.0 * (20.0 - toNumber (framesInSection - i)) / 20.0))
             imageMagickGradient outdir file v i
             imageMagickDissolve outdir file v i pct
+            imageMagickScale true outdir file v i
             when (not dryRun)
               $ liftEffect do
                   FS.unlink (outJpg outdir file v i)
                   FS.unlink (outGrad outdir file v i)
                   pure unit
           | otherwise = do
-            imageMagickNoop outdir file v i
+            imageMagickScale false outdir file v i
             when (not dryRun) $ liftEffect (FS.unlink (outJpg outdir file v i))
       next
 
+-- 3 24 390px
 main :: Effect Unit
 main =
   launchAff_ do
@@ -375,4 +381,5 @@ main =
       for_ backgroundNotes \marker -> do
         for_ backgroundVoices \voice ->
           makeSingleFrame voice marker i
+        ffmpegSoloFrame (markerToIdx marker * framesInSection + i)
         mergeVoicesAndCleanSingleFrame marker i

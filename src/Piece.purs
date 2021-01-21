@@ -112,8 +112,6 @@ wereWalkingOnTheAirEngineInfo =
 
 kr = (toNumber wereWalkingOnTheAirEngineInfo.msBetweenSamples) / 1000.0 :: Number
 
-nFrames = 1000 :: Int -- 165 :: Int
-
 fullVideoWidth = 600.0 :: Number
 
 fullVideoHeight = 600.0 :: Number
@@ -122,7 +120,9 @@ videoWidth = fullVideoWidth / 3.0 :: Number
 
 videoHeight = fullVideoHeight / 3.0 :: Number
 
-backgroundFps = 20.0 :: Number
+fps = 10.0 :: Number
+
+framesInSection = floor $ fps * measure * 2.0 :: Int
 
 --videoWidth = 768.0 :: Number
 --videoHeight = 512.0 :: Number
@@ -816,8 +816,28 @@ toNel Nil = mempty :| Nil
 
 toNel (a : b) = a :| b
 
-timeToBackgroundFrame :: BackgroundNote -> Number -> Int
-timeToBackgroundFrame _ n = max 0 (min (nFrames - 1) (floor (n * backgroundFps)))
+markerToIdx :: BackgroundNote -> Int
+markerToIdx n = case n of
+  Nt0 -> 0
+  Nt1 -> 1
+  Nt2 -> 2
+  Nt3 -> 3
+  Nt4 -> 4
+  Nt5 -> 5
+  Nt6 -> 6
+  Nt7 -> 7
+  Nt8 -> 8
+  Nt9 -> 9
+  Nt10 -> 10
+  Nt11 -> 11
+  Nt12 -> 12
+  Nt13 -> 13
+
+asMosaicString :: BackgroundNote -> Int -> String
+asMosaicString bn n = show (markerToIdx bn) <> "." <> show n <> ".mosaic"
+
+timeToBackgroundFrame :: BackgroundNote -> Number -> String
+timeToBackgroundFrame bn n = asMosaicString bn $ max 0 (min (framesInSection - 1) (floor $ n * fps))
 
 fluteCoords :: Number -> Number -> Number -> FluteNote -> Maybe Rectangle
 fluteCoords w h n v
@@ -854,7 +874,7 @@ backgroundEventsToVideo v bvCoords (a : _) time =
     resizeInfo = resizeVideo videoWidth videoHeight videoCoords.width videoCoords.height
 
     -- img = FromVideo { name: show v <> show currentEvent.note, currentTime: Just $ time - currentEvent.onset }
-    img = FromImage { name: show (timeToBackgroundFrame currentEvent.note (time - currentEvent.onset)) }
+    img = FromImage { name: timeToBackgroundFrame currentEvent.note (time - currentEvent.onset) }
 
     -- out = drawImage img' 0.0 0.0
     out = drawImageFull img (resizeInfo.x + (voiceToWidth v)) (resizeInfo.y + (voiceToHeight v)) resizeInfo.sWidth resizeInfo.sHeight videoCoords.x videoCoords.y videoCoords.width videoCoords.height
@@ -1400,7 +1420,7 @@ main =
             <> (A.fromFoldable <<< join) (map (\v -> map (\n -> let name = show v <> show n in Tuple name ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/fake/" <> name <> ".ogg")) backgroundNotes) backgroundVoices)
         )
     -- courtesy of <a href="https://www.freestock.com/free-videos/loop-animation-falling-snowflakes-alpha-matte-3102526">Image used under license from Freestock.com</a>
-    , images = makeImagesKeepingCache 20 (map (\i -> Tuple (show i) ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/fake/bkg0/" <> show i <> ".jpg")) (A.range 1 nFrames))
+    , images = makeImagesKeepingCache 20 (join $ map (\bn -> map (\i -> let name = asMosaicString bn i in Tuple name ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/real/backgroundPortrait/" <> name <> ".jpg")) (A.range 0 (framesInSection - 1))) (A.fromFoldable backgroundNotes))
     --, images =
     --  makePooledImagesFromCanvasesKeepingCache 20
     --    { videos: [ Tuple "vid" "https://klank-share.s3-eu-west-1.amazonaws.com/wwia/fake/tvcropxLong20fps.mp4" ]
