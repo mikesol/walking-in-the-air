@@ -9,12 +9,12 @@ import Control.Monad.Rec.Class (Step(..), tailRec)
 import Data.Array as A
 import Data.DateTime.Instant (unInstant)
 import Data.Either (Either(..))
-import Data.Foldable (traverse_, foldl, fold)
+import Data.Foldable (traverse_, fold)
 import Data.Generic.Rep (class Generic)
 import Data.Generic.Rep.Show (genericShow)
 import Data.Identity (Identity(..))
 import Data.Int (floor, toNumber)
-import Data.Lens (over, traversed)
+import Data.Lens (_2, _Left, over, traversed)
 import Data.Lens.Record (prop)
 import Data.List (List(..), (:))
 import Data.List as L
@@ -39,9 +39,8 @@ import FRP.Behavior.Audio (AV(..), AudioUnit, CanvasInfo(..), EngineInfo, defaul
 import FRP.Event (Event, makeEvent, subscribe)
 import Graphics.Canvas (Rectangle)
 import Graphics.Drawing (Color, Point)
-import Graphics.Painting (Gradient(..), ImageSource(..), Painting, circle, drawImage, drawImageFull, fillColor, fillGradient, filled, rectangle)
-import Klank.Dev.Util (CanvasAsImageRenderInfo, makeBuffersKeepingCache, makeCanvasesKeepingCache, makeImagesKeepingCache, makePooledCanvasesKeepingCache, makePooledImagesFromCanvasesKeepingCache, makeVideosKeepingCache)
-import Klank.Dev.Util as KU
+import Graphics.Painting (Gradient(..), ImageSource(..), Painting, circle, drawImageFull, fillColor, fillGradient, filled, rectangle)
+import Klank.Dev.Util (makeBuffersKeepingCache, makeImagesKeepingCache)
 import Math (pi, pow, sin, (%))
 import Type.Klank.Dev (Klank', defaultEngineInfo, klank)
 import Web.Event.EventTarget (EventListener, addEventListener, eventListener, removeEventListener)
@@ -1298,7 +1297,7 @@ env e =
     }
 
 scene :: Interactions -> WAccumulator -> CanvasInfo -> Number -> Behavior (AV D2 WAccumulator)
-scene inter acc (CanvasInfo { w, h }) time = go <$> interactionLog inter
+scene inter acc (CanvasInfo { w, h, boundingClientRect }) time = go <$> interactionLog inter
   where
   go { interactions } =
     AV
@@ -1314,7 +1313,13 @@ scene inter acc (CanvasInfo { w, h }) time = go <$> interactionLog inter
     { audio, visual, accumulator } =
       env
         { accumulator: acc
-        , interactions: M.toUnfoldable interactions
+        , interactions:
+            over (traversed <<< _2 <<< (prop (SProxy :: SProxy "pt")) <<< _Left)
+              ( \{ x, y } ->
+                  { x: x - boundingClientRect.x, y: y - boundingClientRect.y
+                  }
+              )
+              (M.toUnfoldable interactions)
         , time
         , canvas: { w, h }
         }

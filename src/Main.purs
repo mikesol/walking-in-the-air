@@ -1,8 +1,8 @@
 module Main where
 
 import Prelude
-import Data.Array as A
 import Color (Color, rgb, toHexString)
+import Data.Array as A
 import Data.Foldable (for_, foldl)
 import Data.Int (floor, toNumber)
 import Data.Lens (over)
@@ -16,7 +16,7 @@ import Effect (Effect)
 import Effect.Aff (Aff, error, launchAff_, throwError)
 import Effect.Class (liftEffect)
 import Effect.Class.Console (log)
-import Klank.Dev (BackgroundNote, BackgroundVoice(..), backgroundNotes, backgroundVoices, markerToIdx, framesInSection)
+import Klank.Dev (BackgroundNote(..), BackgroundVoice(..), backgroundNotes, backgroundVoices, framesInSection, markerToIdx)
 import Math ((%))
 import Node.ChildProcess (Exit(..))
 import Node.ChildProcess as CP
@@ -74,8 +74,67 @@ outputFrame yOffset seconds inputFile outputFile scale =
 
 vScale = 200 :: Int
 
-snowGradientAt :: (Number -> Number) -> (Number -> Number) -> Number -> String -> Array String
-snowGradientAt posF rotF time outf = makeGradient end stops (floor rotC) videoWidth outf
+-- on4false
+backgroundNoteToStartColor :: BackgroundNote -> Color
+backgroundNoteToStartColor Nt0 = rgb 194 233 251
+
+backgroundNoteToStartColor Nt1 = rgb 250 208 196
+
+backgroundNoteToStartColor Nt2 = rgb 255 236 210
+
+backgroundNoteToStartColor Nt3 = rgb 254 207 239
+
+backgroundNoteToStartColor Nt4 = rgb 226 235 240
+
+backgroundNoteToStartColor Nt5 = rgb 102 126 234
+
+backgroundNoteToStartColor Nt6 = rgb 253 252 251
+
+backgroundNoteToStartColor Nt7 = rgb 137 247 254
+
+backgroundNoteToStartColor Nt8 = rgb 245 247 250
+
+backgroundNoteToStartColor Nt9 = rgb 245 239 239
+
+backgroundNoteToStartColor Nt10 = rgb 163 189 237
+
+backgroundNoteToStartColor Nt11 = rgb 67 67 67
+
+backgroundNoteToStartColor Nt12 = rgb 150 222 218
+
+backgroundNoteToStartColor Nt13 = rgb 255 195 160
+
+backgroundNoteToEndColor :: BackgroundNote -> Color
+backgroundNoteToEndColor Nt0 = rgb 161 196 253
+
+backgroundNoteToEndColor Nt1 = rgb 255 154 158
+
+backgroundNoteToEndColor Nt2 = rgb 252 182 159
+
+backgroundNoteToEndColor Nt3 = rgb 255 154 158
+
+backgroundNoteToEndColor Nt4 = rgb 207 217 223
+
+backgroundNoteToEndColor Nt5 = rgb 118 75 162
+
+backgroundNoteToEndColor Nt6 = rgb 226 209 195
+
+backgroundNoteToEndColor Nt7 = rgb 102 166 255
+
+backgroundNoteToEndColor Nt8 = rgb 195 207 226
+
+backgroundNoteToEndColor Nt9 = rgb 254 173 166
+
+backgroundNoteToEndColor Nt10 = rgb 105 145 199
+
+backgroundNoteToEndColor Nt11 = rgb 0 0 0
+
+backgroundNoteToEndColor Nt12 = rgb 80 201 195
+
+backgroundNoteToEndColor Nt13 = rgb 255 175 189
+
+snowGradientAt :: Color -> Color -> (Number -> Number) -> (Number -> Number) -> Number -> String -> Array String
+snowGradientAt startColor endColor posF rotF time outf = makeGradient end stops (floor rotC) videoWidth outf
   where
   w = toNumber videoWidth
 
@@ -93,11 +152,7 @@ snowGradientAt posF rotF time outf = makeGradient end stops (floor rotC) videoWi
 
   end = floor $ 5.0 * w
 
-  white = rgb 255 255 255
-
-  blue = rgb 64 163 255
-
-  stops = (foldl (\{ acc, n } (Tuple a b) -> { acc: acc <> [ Tuple (a - n) b ], n: a }) { acc: [], n: 0 } [ Tuple stop0 (Tuple white blue), Tuple (stop0 + ((stop1 - stop0) / 2)) (Tuple blue white), Tuple stop1 (Tuple white blue), Tuple (stop1 + ((stop2 - stop1) / 2)) (Tuple blue white), Tuple stop2 (Tuple white blue), Tuple end (Tuple blue white) ]).acc
+  stops = (foldl (\{ acc, n } (Tuple a b) -> { acc: acc <> [ Tuple (a - n) b ], n: a }) { acc: [], n: 0 } [ Tuple stop0 (Tuple startColor endColor), Tuple (stop0 + ((stop1 - stop0) / 2)) (Tuple endColor startColor), Tuple stop1 (Tuple startColor endColor), Tuple (stop1 + ((stop2 - stop1) / 2)) (Tuple endColor startColor), Tuple stop2 (Tuple startColor endColor), Tuple end (Tuple endColor startColor) ]).acc
 
 makeGradient :: Int -> Array (Tuple Int (Tuple Color Color)) -> Int -> Int -> String -> Array String
 makeGradient w colors rot realDim outf =
@@ -220,11 +275,13 @@ imageMagickDissolve odr file v i pct = do
         throwError (error $ "Non-zero exit of magick: " <> show n)
       _ -> throwError (error "Non-zero exit of magick")
 
-imageMagickGradient :: String -> String -> Int -> Int -> Aff Unit
-imageMagickGradient odr file v i = do
+imageMagickGradient :: Color -> Color -> String -> String -> Int -> Int -> Aff Unit
+imageMagickGradient startColor endColor odr file v i = do
   let
     args =
       snowGradientAt
+        startColor
+        endColor
         (toNumber videoWidth * _)
         (360.0 * _)
         ((toNumber i / 10.0 + 2.0) % (toNumber framesInSection))
@@ -337,6 +394,10 @@ mergeVoicesAndCleanSingleFrame b i = do
         , "z/" <> (show $ markerToIdx b) <> "." <> (show i) <> ".mosaic.jpg"
         ]
 
+fadeInFrames = 20 :: Int
+
+fadeInFramesN = toNumber fadeInFrames :: Number
+
 makeSingleFrame :: BackgroundVoice -> BackgroundNote -> Int -> Aff Unit
 makeSingleFrame a b i =
   let
@@ -349,13 +410,13 @@ makeSingleFrame a b i =
       ffmpegSingleFrame outdir file v i start yOffset
       let
         next
-          | i < 20 || i > framesInSection - 20 = do
+          | i < fadeInFrames || i > framesInSection - fadeInFrames = do
             let
-              pct
-                | i < 20 = max 0 (min 100 (floor $ 100.0 * (toNumber (20 - i)) / 20.0))
-                | otherwise = max 0 (min 100 (floor $ 100.0 * (20.0 - toNumber (framesInSection - i)) / 20.0))
-            imageMagickGradient outdir file v i
-            imageMagickDissolve outdir file v i pct
+              vars
+                | i < fadeInFrames = { pct: max 0 (min 100 (floor $ 100.0 * (toNumber (fadeInFrames - i)) / fadeInFramesN)), startColor: (backgroundNoteToStartColor b), endColor: (backgroundNoteToEndColor b) }
+                | otherwise = { pct: max 0 (min 100 (floor $ 100.0 * (fadeInFramesN - toNumber (framesInSection - i)) / fadeInFramesN)), startColor: (backgroundNoteToStartColor b), endColor: (backgroundNoteToEndColor b) }
+            imageMagickGradient vars.startColor vars.endColor outdir file v i
+            imageMagickDissolve outdir file v i vars.pct
             imageMagickScale true outdir file v i
             when (not dryRun)
               $ liftEffect do
