@@ -9,7 +9,7 @@ import Control.Monad.Rec.Class (Step(..), tailRec)
 import Data.Array as A
 import Data.DateTime.Instant (unInstant)
 import Data.Either (Either(..))
-import Data.Foldable (traverse_, fold)
+import Data.Foldable (fold, foldl, traverse_)
 import Data.Generic.Rep (class Generic)
 import Data.Generic.Rep.Show (genericShow)
 import Data.Identity (Identity(..))
@@ -18,9 +18,9 @@ import Data.Lens (_2, _Left, over, traversed)
 import Data.Lens.Record (prop)
 import Data.List (List(..), (:))
 import Data.List as L
-import Data.Map (Map, insertWith)
+import Data.Map (Map, insert, lookup, update)
 import Data.Map as M
-import Data.Maybe (Maybe(..), isJust, maybe)
+import Data.Maybe (Maybe(..), fromMaybe, isJust, maybe)
 import Data.Newtype (unwrap, wrap)
 import Data.NonEmpty (NonEmpty(..), (:|))
 import Data.Set (Set, member, union)
@@ -39,7 +39,8 @@ import FRP.Behavior.Audio (AV(..), AudioUnit, CanvasInfo(..), EngineInfo, defaul
 import FRP.Event (Event, makeEvent, subscribe)
 import Graphics.Canvas (Rectangle)
 import Graphics.Drawing (Color, Point)
-import Graphics.Painting (Gradient(..), ImageSource(..), Painting, circle, drawImageFull, fillColor, fillGradient, filled, rectangle)
+import Graphics.Drawing.Font (bold, font, sansSerif)
+import Graphics.Painting (Gradient(..), ImageSource(..), MeasurableText, Painting, circle, drawImageFull, fillColor, fillGradient, filled, rectangle, text, textMeasurableText)
 import Klank.Dev.Util (makeBuffersKeepingCache, makeImagesKeepingCache)
 import Math (pi, pow, sin, (%))
 import Type.Klank.Dev (Klank', defaultEngineInfo, klank)
@@ -47,7 +48,7 @@ import Web.Event.EventTarget (EventListener, addEventListener, eventListener, re
 import Web.HTML (window)
 import Web.HTML.Navigator (userAgent)
 import Web.HTML.Window (navigator, toEventTarget)
-import Web.TouchEvent (TouchEvent, TouchList)
+import Web.TouchEvent (TouchEvent)
 import Web.TouchEvent.Touch (identifier)
 import Web.TouchEvent.Touch as T
 import Web.TouchEvent.TouchEvent (changedTouches)
@@ -125,12 +126,6 @@ framesInSection = floor $ fps * measure * 2.0 :: Int
 
 --videoWidth = 768.0 :: Number
 --videoHeight = 512.0 :: Number
-snowWidth = 1000.0 :: Number
-
-snowHeight = 1000.0 :: Number
-
-snowVideoLen = 30.0 :: Number
-
 tempo = 60.0 :: Number
 
 beat = 60.0 / tempo :: Number
@@ -254,7 +249,7 @@ type WAccumulator
 
 type RenderInfo
   = { audio :: List AudioUnitD2
-    , visual :: Painting
+    , visual :: Map MeasurableText { width :: Number } -> Painting
     , accumulator :: WAccumulator
     }
 
@@ -872,6 +867,9 @@ backgroundEventsToVideo v bvCoords (a : _) time =
 
     resizeInfo = resizeVideo videoWidth videoHeight videoCoords.width videoCoords.height
 
+    --______________________ = case v of
+    --  Bv0 -> spy ("ct") (time - currentEvent.onset)
+    --  _ -> 3.1416
     -- img = FromVideo { name: show v <> show currentEvent.note, currentTime: Just $ time - currentEvent.onset }
     img = FromImage { name: timeToBackgroundFrame currentEvent.note (time - currentEvent.onset) }
 
@@ -1138,6 +1136,7 @@ env e =
 
     isBackgroundVideoTocuhed = if e.time < touchableStarts then const false else isRectangleTouched (map snd touches) <<< bvCoords
 
+    -- ____________________ = spy "ibv0" (map snd e.interactions)
     backgroundEvents =
       memoize \v ->
         let
@@ -1242,21 +1241,15 @@ env e =
 
     fluteHistory = modFluteHistory isFluteTouched e.accumulator.fluteHistory e.time fluteNotes
 
-    fadeIn
-      | e.time < singingStarts = filled (fillColor (rgb 0 0 0)) (rectangle 0.0 0.0 e.canvas.w e.canvas.h)
-      | e.time < firstVerseStarts = filled (fillColor (rgba 0 0 0 (calcSlope singingStarts 1.0 firstVerseStarts 0.0 e.time))) (rectangle 0.0 0.0 e.canvas.w e.canvas.h)
+    fadeIn wwiaWidth
+      | e.time < singingStarts = filled (fillColor (rgb 0 0 0)) (rectangle 0.0 0.0 e.canvas.w e.canvas.h) <> wwiaT ((e.canvas.w - wwiaWidth) / 2.0) (e.canvas.h / 2.0) 1.0
+      | e.time < firstVerseStarts = let opq = (calcSlope singingStarts 1.0 firstVerseStarts 0.0 e.time) in filled (fillColor (rgba 0 0 0 opq)) (rectangle 0.0 0.0 e.canvas.w e.canvas.h) <> wwiaT ((e.canvas.w - wwiaWidth) / 2.0) (e.canvas.h / 2.0) opq
       | otherwise = mempty
 
     fadeOut
       | e.time < thirdVerseEnds = mempty
       | e.time < pieceEnds = filled (fillColor (rgba 0 0 0 (calcSlope thirdVerseEnds 0.0 pieceEnds 1.0 e.time))) (rectangle 0.0 0.0 e.canvas.w e.canvas.h)
       | otherwise = filled (fillColor (rgb 0 0 0)) (rectangle 0.0 0.0 e.canvas.w e.canvas.h)
-
-    snowResizeInfo = resizeVideo snowWidth snowHeight e.canvas.w e.canvas.h
-
-    snow = mempty
-  -- snow = drawImageFull (FromImage { name: "snow1" }) snowResizeInfo.x snowResizeInfo.y snowResizeInfo.sWidth snowResizeInfo.sHeight 0.0 0.0 e.canvas.w e.canvas.h
-  --snow = drawImageFull (FromVideo { name: "snow", currentTime: Just $ e.time % snowVideoLen }) snowResizeInfo.x snowResizeInfo.y snowResizeInfo.sWidth snowResizeInfo.sHeight 0.0 0.0 e.canvas.w e.canvas.h
   in
     { audio:
         (fold $ map _.a backgroundRenderingInfo)
@@ -1267,22 +1260,16 @@ env e =
                 Nothing -> Nil
             )
     , visual:
-        fold
-          ( fold (map _.v backgroundRenderingInfo)
-              -- : fold (L.catMaybes (map _.v synthRenderingInfo))
-              
-              -- : bellsToVisual bells e.time
-              
-              -- : fold (fluteHistoryToVideo fCoords fluteHistory e.time)
-              
-              -- : fadeIn
-              
-              -- : snow
-              
-              -- : fadeOut
-              
-              : Nil
-          )
+        \words ->
+          fold
+            ( fold (map _.v backgroundRenderingInfo)
+                : fold (L.catMaybes (map _.v synthRenderingInfo))
+                : bellsToVisual bells e.time
+                : fold (fluteHistoryToVideo fCoords fluteHistory e.time)
+                : fadeIn (maybe 0.0 _.width (M.lookup wwia words))
+                : fadeOut
+                : Nil
+            )
     , accumulator:
         { backgroundEvents
         , activeSynthEvents
@@ -1296,6 +1283,21 @@ env e =
         }
     }
 
+wwia :: MeasurableText
+wwia =
+  textMeasurableText
+    (font sansSerif 30 bold)
+    "We're walking on the air"
+
+wwiaT :: Number -> Number -> Number -> Painting
+wwiaT x y a =
+  text
+    (font sansSerif 30 bold)
+    x
+    y
+    (fillColor (rgba 255 255 255 a))
+    "We're walking on the air"
+
 scene :: Interactions -> WAccumulator -> CanvasInfo -> Number -> Behavior (AV D2 WAccumulator)
 scene inter acc (CanvasInfo { w, h, boundingClientRect }) time = go <$> interactionLog inter
   where
@@ -1304,8 +1306,8 @@ scene inter acc (CanvasInfo { w, h, boundingClientRect }) time = go <$> interact
       { audio: Just (speaker (playBuf_ "backgroundWind" "backgroundWind" 1.0 :| audio))
       , visual:
           Just
-            { painting: \_ -> visual
-            , words: Nil
+            { painting: \{ words } -> visual words
+            , words: wwia : Nil
             }
       , accumulator
       }
@@ -1424,7 +1426,6 @@ main =
         ( [ Tuple "bell" "https://freesound.org/data/previews/439/439616_737466-hq.mp3", Tuple "backgroundWind" "https://freesound.org/data/previews/244/244942_263745-lq.mp3" ]
             <> (A.fromFoldable <<< join) (map (\v -> map (\n -> let name = show v <> show n in Tuple name ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/fake/" <> name <> ".ogg")) backgroundNotes) backgroundVoices)
         )
-    -- courtesy of <a href="https://www.freestock.com/free-videos/loop-animation-falling-snowflakes-alpha-matte-3102526">Image used under license from Freestock.com</a>
     , images = makeImagesKeepingCache 20 (join $ map (\bn -> map (\i -> let name = asMosaicString bn i in Tuple name ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/real/backgroundPortrait/" <> name <> ".jpg")) (A.range 0 (framesInSection - 1))) (A.fromFoldable backgroundNotes))
     --, images =
     --  makePooledImagesFromCanvasesKeepingCache 20
@@ -1874,39 +1875,113 @@ type Interaction
 purge :: Number -> InteractionMap -> InteractionMap
 purge n = M.filter \{ onset } -> onset + 20.0 > n
 
-handleTE :: Boolean -> Ref.Ref InteractionMap -> TouchEvent -> Effect Unit
-handleTE isEnd il te = do
+handleTE :: MAction -> Ref.Ref Int -> Ref.Ref (Map Int Int) -> Ref.Ref InteractionMap -> TouchEvent -> Effect Unit
+handleTE mAction indxr rlsr ilk te = do
   tn <- map (unwrap <<< unInstant) now
-  void $ Ref.modify (go tn l ts) il
+  ctr' <- Ref.read indxr
+  mppy' <- Ref.read rlsr
+  il' <- Ref.read ilk
+  let
+    { ctr, mppy, il } =
+      foldl
+        ( \{ ctr, mppy, il } i ->
+            let
+              t' = TL.item i ts
+            in
+              case t' of
+                Nothing -> { ctr, mppy, il }
+                Just t -> case mAction of
+                  MDown ->
+                    let
+                      newC = ctr + 1
+                    in
+                      { ctr: newC
+                      , mppy: insert (identifier t) newC mppy
+                      , il: insert newC ({ onset: tn, pt: Left { x: toNumber $ T.clientX t, y: toNumber $ T.clientY t } }) il
+                      }
+                  _ -> case lookup (identifier t) mppy of
+                    Nothing -> { ctr, mppy, il }
+                    Just newC ->
+                      { ctr
+                      , mppy
+                      , il:
+                          update
+                            ( \v ->
+                                Just
+                                  v
+                                    { pt =
+                                      case mAction of
+                                        MUp -> Right tn
+                                        _ -> Left { x: toNumber $ T.clientX t, y: toNumber $ T.clientY t }
+                                    }
+                            )
+                            newC
+                            il
+                      }
+        )
+        { ctr: ctr', mppy: mppy', il: il' }
+        (L.range 0 (l - 1))
+  Ref.write ctr indxr
+  Ref.write mppy rlsr
+  Ref.write il ilk
   where
-  go :: Number -> Int -> TouchList -> InteractionMap -> InteractionMap
-  go tn 0 _ m = (if isEnd then purge tn else identity) m
-
-  go tn n tl m = go tn (n - 1) tl (maybe m (\t -> insertWith (\e nw -> e { pt = nw.pt }) (identifier t) { onset: tn, pt: if isEnd then Right tn else Left { x: toNumber $ T.clientX t, y: toNumber $ T.clientY t } } m) (TL.item (l - n) tl))
-
   ts = changedTouches te
 
   l = TL.length ts
 
-handleME :: Int -> Boolean -> Ref.Ref InteractionMap -> MouseEvent -> Effect Unit
-handleME i isEnd ref me = do
-  tn <- map (unwrap <<< unInstant) now
-  void $ Ref.modify (if isEnd then purge tn else identity <<< insertWith (\e n -> e { pt = n.pt }) i { onset: tn, pt: if isEnd then Right tn else Left { x: toNumber $ ME.clientX me, y: toNumber $ ME.clientY me } }) ref
+data MAction
+  = MUp
+  | MMove
+  | MDown
 
-makeTouchListener :: Boolean -> Ref.Ref InteractionMap -> Effect EventListener
-makeTouchListener isEnd interactions =
+data TState
+  = TFree
+  | TUsed
+
+mapToTState :: Map Int TState -> Int -> TState
+mapToTState m i = fromMaybe TFree $ lookup i m
+
+ptize :: forall r. MouseEvent -> Either Point r
+ptize me = Left { x: toNumber $ ME.clientX me, y: toNumber $ ME.clientY me }
+
+handleME :: Int -> MAction -> Ref.Ref InteractionMap -> MouseEvent -> Effect Unit
+handleME i mAction ref me = do
+  tn <- map (unwrap <<< unInstant) now
+  void
+    $ Ref.modify
+        ( case mAction of
+            MDown ->
+              insert i
+                { onset: tn
+                , pt: ptize me
+                }
+            MMove ->
+              update
+                ( \e ->
+                    Just
+                      $ e { pt = ptize me }
+                )
+                i
+            MUp -> (purge tn) <<< (update (\e -> Just $ e { pt = Right tn }) i)
+        )
+        ref
+
+makeTouchListener :: MAction -> Ref.Ref Int -> Ref.Ref (Map Int Int) -> Ref.Ref InteractionMap -> Effect EventListener
+makeTouchListener mAction idxr rlsr interactions =
   eventListener \e -> do
     TE.fromEvent e
       # traverse_ \te -> do
-          handleTE isEnd interactions te
+          handleTE mAction idxr rlsr interactions te
 
-makeMouseListener :: Boolean -> Ref.Ref Int -> Ref.Ref InteractionMap -> Effect EventListener
-makeMouseListener isEnd ctr interactions =
+makeMouseListener :: MAction -> Ref.Ref Int -> Ref.Ref InteractionMap -> Effect EventListener
+makeMouseListener mAction ctr interactions =
   eventListener \e -> do
     ME.fromEvent e
       # traverse_ \me -> do
-          nt <- if isEnd then Ref.modify (_ + 1) ctr else Ref.read ctr
-          handleME nt isEnd interactions me
+          nt <- case mAction of
+            MUp -> Ref.modify (_ + 1) ctr
+            _ -> Ref.read ctr
+          handleME nt mAction interactions me
 
 getInteractivity :: Effect Interactions
 getInteractivity = do
@@ -1917,15 +1992,15 @@ getInteractivity = do
     mobile = isJust (indexOf (Pattern "iPhone") ua) || isJust (indexOf (Pattern "iPad") ua) || isJust (indexOf (Pattern "Android") ua)
   ctr <- Ref.new 0
   referencePosition <- Ref.new Nothing
-  totalInteractions <- Ref.new 0
   interactions <- Ref.new M.empty
+  interactionIds <- Ref.new M.empty
   target <- toEventTarget <$> window
-  touchStartListener <- makeTouchListener false interactions
-  touchMoveListener <- makeTouchListener false interactions
-  touchEndListener <- makeTouchListener true interactions
-  mouseDownListener <- makeMouseListener false ctr interactions
-  mouseMoveListener <- makeMouseListener false ctr interactions
-  mouseUpListener <- makeMouseListener true ctr interactions
+  touchStartListener <- makeTouchListener MDown ctr interactionIds interactions
+  touchMoveListener <- makeTouchListener MMove ctr interactionIds interactions
+  touchEndListener <- makeTouchListener MUp ctr interactionIds interactions
+  mouseDownListener <- makeMouseListener MDown ctr interactions
+  mouseMoveListener <- makeMouseListener MMove ctr interactions
+  mouseUpListener <- makeMouseListener MUp ctr interactions
   if mobile then do
     addEventListener (wrap "touchstart") touchStartListener false target
     addEventListener (wrap "touchmove") touchMoveListener false target
