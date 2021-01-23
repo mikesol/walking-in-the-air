@@ -38,7 +38,7 @@ import FRP.Behavior (Behavior, behavior)
 import FRP.Behavior.Audio (AV(..), AudioUnit, CanvasInfo(..), EngineInfo, defaultExporter, defaultParam, gain_', pannerMono_, playBufT_, playBuf_, runInBrowser_, sinOsc_, speaker)
 import FRP.Event (Event, makeEvent, subscribe)
 import Graphics.Canvas (Rectangle)
-import Graphics.Drawing (Color, Point)
+import Graphics.Drawing (Color, Font, Point)
 import Graphics.Drawing.Font (bold, font, sansSerif)
 import Graphics.Painting (Gradient(..), ImageSource(..), MeasurableText, Painting, circle, drawImageFull, fillColor, fillGradient, filled, rectangle, text, textMeasurableText)
 import Klank.Dev.Util (makeBuffersKeepingCache, makeImagesKeepingCache)
@@ -1283,20 +1283,24 @@ env e =
         }
     }
 
+wereWalkingOnTheAir = "We're walking on the air" :: String
+
+wereWalkingOnTheAirFont = font sansSerif 30 bold :: Font
+
 wwia :: MeasurableText
 wwia =
   textMeasurableText
-    (font sansSerif 30 bold)
-    "We're walking on the air"
+    wereWalkingOnTheAirFont
+    wereWalkingOnTheAir
 
 wwiaT :: Number -> Number -> Number -> Painting
 wwiaT x y a =
   text
-    (font sansSerif 30 bold)
+    wereWalkingOnTheAirFont
     x
     y
     (fillColor (rgba 255 255 255 a))
-    "We're walking on the air"
+    wereWalkingOnTheAir
 
 scene :: Interactions -> WAccumulator -> CanvasInfo -> Number -> Behavior (AV D2 WAccumulator)
 scene inter acc (CanvasInfo { w, h, boundingClientRect }) time = go <$> interactionLog inter
