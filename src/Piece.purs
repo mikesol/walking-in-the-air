@@ -57,10 +57,6 @@ import Web.TouchEvent.TouchList as TL
 import Web.UIEvent.MouseEvent (MouseEvent)
 import Web.UIEvent.MouseEvent as ME
 
-starsW = 1024.0 :: Number
-
-starsH = 656.0 :: Number
-
 fluteNoteToRGB :: FluteNote -> RGB
 fluteNoteToRGB fn = case fn of
   Fn0 -> RGB 255 231 190
@@ -1336,9 +1332,7 @@ env e =
 
     fluteHistory = modFluteHistory isFluteTouched e.accumulator.fluteHistory e.time fluteNotes
 
-    scaleF = 1.5
-
-    stars = translate (e.canvas.w / 2.0) (e.canvas.h / 2.0) (rotate (e.time * pi / 180.0) (scale scaleF scaleF (translate (scaleF * e.canvas.w / -2.0) (scaleF * e.canvas.h / -2.0) (drawImageFull (FromImage { name: "stars" }) 0.0 0.0 starsW starsH 0.0 0.0 starsW starsH))))
+    pieceBackground = filled (fillColor (rgba 0 0 0 1.0)) (rectangle 0.0 0.0 e.canvas.w e.canvas.h)
 
     solo = soloVideo bvCoords e.time
 
@@ -1363,7 +1357,7 @@ env e =
     , visual:
         \words ->
           fold
-            ( stars
+            ( pieceBackground
                 : fold (map _.v backgroundRenderingInfo)
                 : solo
                 : fold (L.catMaybes (map _.v synthRenderingInfo))
@@ -1535,7 +1529,7 @@ main =
         ( [ Tuple "bell" "https://freesound.org/data/previews/439/439616_737466-hq.mp3", Tuple "backgroundWind" "https://freesound.org/data/previews/244/244942_263745-lq.mp3" ]
             <> (A.fromFoldable <<< join) (map (\v -> map (\n -> let name = show v <> show n in Tuple name ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/fake/" <> name <> ".ogg")) backgroundNotes) backgroundVoices)
         )
-    , images = makeImagesKeepingCache 20 ([ Tuple "stars" "https://klank-share.s3-eu-west-1.amazonaws.com/wwia/real/stars.jpg" ] <> map (\i -> (Tuple ("wwia." <> show i) ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/real/solo/wwia." <> show i <> ".jpg"))) (A.range (14 * (floor $ 2.0 * measure * fps)) (21 * (floor $ 2.0 * measure * fps) - 1)) <> join (map (\bn -> map (\i -> let name = asMosaicString bn i in Tuple name ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/real/background2Portrait/" <> name <> ".jpg")) (A.range 0 (framesInSection - 1))) (A.fromFoldable backgroundNotes)))
+    , images = makeImagesKeepingCache 20 (map (\i -> (Tuple ("wwia." <> show i) ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/real/solo/wwia." <> show i <> ".jpg"))) (A.range (14 * (floor $ 2.0 * measure * fps)) (21 * (floor $ 2.0 * measure * fps) - 1)) <> join (map (\bn -> map (\i -> let name = asMosaicString bn i in Tuple name ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/real/background2Portrait/" <> name <> ".jpg")) (A.range 0 (framesInSection - 1))) (A.fromFoldable backgroundNotes)))
     --, images =
     --  makePooledImagesFromCanvasesKeepingCache 20
     --    { videos: [ Tuple "vid" "https://klank-share.s3-eu-west-1.amazonaws.com/wwia/fake/tvcropxLong20fps.mp4" ]
