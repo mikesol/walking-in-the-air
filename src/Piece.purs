@@ -31,7 +31,6 @@ import Data.Tuple (Tuple(..), fst, snd)
 import Data.Typelevel.Num (D2, D8, d0, d1, d2, d3, d4, d5, d6, d7)
 import Data.Vec (Vec, (+>), empty)
 import Data.Vec as V
---import Debug.Trace (spy)
 import Effect (Effect)
 import Effect.Now (now)
 import Effect.Ref as Ref
@@ -43,7 +42,7 @@ import Graphics.Drawing (Color, Font, Point)
 import Graphics.Drawing.Font (bold, font, sansSerif)
 import Graphics.Painting (Gradient(..), ImageSource(..), MeasurableText, Painting, FillStyle, circle, drawImageFull, fillColor, fillGradient, filled, rectangle, rotate, scale, text, textMeasurableText, translate)
 import Klank.Dev.Util (makeBuffersKeepingCache, makeImagesKeepingCache)
-import Math (pi, pow, sin, (%))
+import Math (cos, pi, pow, sin, (%))
 import Type.Klank.Dev (Klank', defaultEngineInfo, klank)
 import Web.Event.EventTarget (EventListener, addEventListener, eventListener, removeEventListener)
 import Web.HTML (window)
@@ -184,7 +183,7 @@ thirdVerseStarts = bridgeStarts + sectionLen :: Number
 
 thirdVerseEnds = thirdVerseStarts + sectionLen :: Number
 
-pieceEnds = thirdVerseStarts + 2.0 * measure :: Number
+pieceEnds = thirdVerseEnds + 2.0 * measure :: Number
 
 type AudioUnitD2
   = AudioUnit D2
@@ -309,8 +308,6 @@ removeStaleBellsAndUpdateForTouches time iter =
     { i: iter, o: { touches: iter.touches, bells: Nil } }
   where
   go :: NewBellLoop -> NewBellStep
-  go { i: { touches: Nil }, o } = Done o
-
   go { i: { bells: Nil }, o } = Done o
 
   go { i: { touches, bells: (a : b) }, o: acc } =
@@ -373,7 +370,7 @@ newBellAvoidingCollisions time { nbx, nby, nbr, xincr, yincr, xmin, ymin, xmax, 
   go { x, y, r, b: Nil } = Done { activated: Nothing, onset: time, x, y, r, pitch }
 
   go { x, y, r, b: (h : t) }
-    | hyp x y h.x h.y <= r + h.r = Loop { x: ik x xincr xmin xmax, y: ik y yincr ymin ymax, r, b: l }
+    | hyp x h.x y h.y <= r + h.r = Loop { x: ik x xincr xmin xmax, y: ik y yincr ymin ymax, r, b: l }
     | otherwise = Loop { x, y, r, b: t }
 
 type BellsIter
@@ -913,7 +910,7 @@ soloVideo bvCoords time =
 
     -- todo: render new images for trailing portion
     leadingCoord
-      | normalizedTime >= 0.0 = min 13 (floor (normalizedTime / (2.0 * measure)))
+      | normalizedTime >= 0.0 = floor (normalizedTime / (2.0 * measure))
       | otherwise = 0
 
     trailingCoord
@@ -939,9 +936,10 @@ soloVideo bvCoords time =
 
     resizeInfo = resizeVideo videoWidth videoHeight videoCoords.width videoCoords.height
 
-    img = FromImage { name: show leadingCoord <> "." <> show trailingCoord <> ".mosaic" }
+    img = FromImage { name: if leadingCoord >= 14 then "wwia." <> show (floor ((toNumber (min 20 leadingCoord)) * 2.0 * measure * fps) + trailingCoord) else show leadingCoord <> "." <> show trailingCoord <> ".mosaic" }
 
-    out = drawImageFull img (resizeInfo.x + (voiceToWidth Solo)) (resizeInfo.y + (voiceToHeight Solo)) resizeInfo.sWidth resizeInfo.sHeight videoCoords.x videoCoords.y videoCoords.width videoCoords.height <> bkg
+    --img = FromImage { name: "wwia.1676" }
+    out = drawImageFull img (resizeInfo.x + if leadingCoord >= 14 then 0.0 else (voiceToWidth Solo)) (resizeInfo.y + if leadingCoord >= 14 then 0.0 else (voiceToHeight Solo)) resizeInfo.sWidth resizeInfo.sHeight videoCoords.x videoCoords.y videoCoords.width videoCoords.height <> bkg
   in
     out
 
@@ -995,7 +993,8 @@ bellsToVisual l time = fold $ map go l
   where
   go bell =
     let
-      opacity =
+      --_______________________ = spy ("bell @ " <> show time) bell
+      opacity' =
         max 0.0
           ( ( min 1.0
                 ( ( case bell.activated of
@@ -1010,8 +1009,19 @@ bellsToVisual l time = fold $ map go l
                     Nothing -> 0.0
                 )
           )
+
+      opacity
+        | time < bridgeStarts + measure = max 0.0 (min 1.0 $ calcSlope bridgeStarts 0.0 (bridgeStarts + measure) 1.0 time) * opacity'
+        | time > thirdVerseStarts = max 0.0 (min 1.0 $ calcSlope thirdVerseStarts 1.0 (thirdVerseStarts + measure) 0.0 time) * opacity'
+        | otherwise = opacity'
+
+      r = floor $ 255.0 * (0.5 * sin (0.1 * pi * (time - bell.onset)) + 0.5)
+
+      g = floor $ 255.0 * (0.5 * cos (0.23521 * pi * (time - bell.onset)) + 0.5)
+
+      b = floor $ 255.0 * (0.5 * sin (0.03523512 * pi * (0.346 + time - bell.onset)) + 0.5)
     in
-      filled (fillColor $ rgba 0 0 0 opacity) (circle bell.x bell.y bell.r)
+      filled (fillColor $ rgba r g b opacity) (circle bell.x bell.y bell.r)
 
 bellsToAudio :: List BellAccumulatorInfo -> Number -> List AudioUnitD2
 bellsToAudio l time = go l Nil
@@ -1099,6 +1109,8 @@ fluteHistoryToAudioUnit l@(a : b) time =
 unselectedFluteColor :: Number -> Rectangle -> FluteNote -> FillStyle
 unselectedFluteColor time rect v = fillColor (rgba 255 255 255 0.0)
 
+selectedF = 0.4 :: Number
+
 selectedFluteColor :: Number -> Rectangle -> FluteNote -> FillStyle
 selectedFluteColor time' rect v =
   let
@@ -1106,24 +1118,24 @@ selectedFluteColor time' rect v =
 
     halfX = (rect.x + rect.width) / 2.0
 
-    time = time' `pow` 2.0
+    time = time'
   in
     fillGradient
       $ LinearGradient { x0: halfX, y0: rect.y, x1: halfX, y1: rect.height }
           ( { color: rgb r g b
-            , position: 0.5 + 0.5 * sin (2.3 * pi * (time + fluteNoteToPeriod v))
+            , position: 0.5 + 0.5 * sin (selectedF * pi * (time + fluteNoteToPeriod v))
             }
               : { color: rgb 255 255 255
-                , position: 0.5 + 0.5 * sin (2.3 * pi * (time + 0.4 + fluteNoteToPeriod v))
+                , position: 0.5 + 0.5 * sin (selectedF * pi * (time + 0.4 + fluteNoteToPeriod v))
                 }
               : { color: rgb r g (b - 15)
-                , position: 0.5 + 0.5 * sin (2.3 * pi * (time + 0.8 + fluteNoteToPeriod v))
+                , position: 0.5 + 0.5 * sin (selectedF * pi * (time + 0.8 + fluteNoteToPeriod v))
                 }
               : { color: rgb 255 255 255
-                , position: 0.5 + 0.5 * sin (2.3 * pi * (time + 1.2 + fluteNoteToPeriod v))
+                , position: 0.5 + 0.5 * sin (selectedF * pi * (time + 1.2 + fluteNoteToPeriod v))
                 }
               : { color: rgb (r + 15) g b
-                , position: 0.5 + 0.5 * sin (2.3 * pi * (time + 1.6 + fluteNoteToPeriod v))
+                , position: 0.5 + 0.5 * sin (selectedF * pi * (time + 1.6 + fluteNoteToPeriod v))
                 }
               : Nil
           )
@@ -1169,10 +1181,12 @@ modFluteHistory f acc' time notes = go notes acc'
 
 energyF = 1.5 :: Number
 
+bellNudgeF = 100.0 :: Number
+
 env :: Env -> RenderInfo
 env e =
   let
-    bellRadius = (min e.canvas.w e.canvas.h) / 20.0
+    bellRadius = (min e.canvas.w e.canvas.h) / 15.0
 
     bellPadding = 15.0
 
@@ -1187,21 +1201,26 @@ env e =
 
     { bells, stream: bellsLoop } =
       if e.time >= bridgeStarts && e.time < thirdVerseStarts then
-        introduceNewBells
-          (max 0 $ 3 - (L.length e.accumulator.bells))
-          e.accumulator.bellsLoop
-          e.time
-          { nbr: bellRadius
-          , nbx: e.time % e.canvas.w
-          , nby: e.time % e.canvas.h
-          , xincr: e.canvas.w / 10.0
-          , xmin: bellRadius + bellPadding
-          , xmax: e.canvas.w - bellRadius - bellPadding
-          , yincr: e.canvas.h / 10.0
-          , ymin: bellRadius + bellPadding
-          , ymax: e.canvas.h - bellRadius - bellPadding
-          }
-          bells
+        let
+          spx = 0.5 + 0.4 * sin (pi * e.time)
+
+          spy = 0.5 + 0.4 * cos (0.3623432634 * pi * e.time)
+        in
+          introduceNewBells
+            (max 0 (3 - (L.length bells)))
+            e.accumulator.bellsLoop
+            e.time
+            { nbr: bellRadius
+            , nbx: spx * e.canvas.w
+            , nby: spy * e.canvas.h
+            , xincr: e.canvas.w / 10.0
+            , xmin: bellRadius + bellPadding
+            , xmax: e.canvas.w - bellRadius - bellPadding
+            , yincr: e.canvas.h / 10.0
+            , ymin: bellRadius + bellPadding
+            , ymax: e.canvas.h - bellRadius - bellPadding
+            }
+            bells
       else
         { bells, stream: e.accumulator.bellsLoop }
 
@@ -1516,7 +1535,7 @@ main =
         ( [ Tuple "bell" "https://freesound.org/data/previews/439/439616_737466-hq.mp3", Tuple "backgroundWind" "https://freesound.org/data/previews/244/244942_263745-lq.mp3" ]
             <> (A.fromFoldable <<< join) (map (\v -> map (\n -> let name = show v <> show n in Tuple name ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/fake/" <> name <> ".ogg")) backgroundNotes) backgroundVoices)
         )
-    , images = makeImagesKeepingCache 20 ([ Tuple "stars" "https://klank-share.s3-eu-west-1.amazonaws.com/wwia/real/stars.jpg" ] <> join (map (\bn -> map (\i -> let name = asMosaicString bn i in Tuple name ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/real/background2Portrait/" <> name <> ".jpg")) (A.range 0 (framesInSection - 1))) (A.fromFoldable backgroundNotes)))
+    , images = makeImagesKeepingCache 20 ([ Tuple "stars" "https://klank-share.s3-eu-west-1.amazonaws.com/wwia/real/stars.jpg" ] <> map (\i -> (Tuple ("wwia." <> show i) ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/real/solo/wwia." <> show i <> ".jpg"))) (A.range (14 * (floor $ 2.0 * measure * fps)) (21 * (floor $ 2.0 * measure * fps) - 1)) <> join (map (\bn -> map (\i -> let name = asMosaicString bn i in Tuple name ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/real/background2Portrait/" <> name <> ".jpg")) (A.range 0 (framesInSection - 1))) (A.fromFoldable backgroundNotes)))
     --, images =
     --  makePooledImagesFromCanvasesKeepingCache 20
     --    { videos: [ Tuple "vid" "https://klank-share.s3-eu-west-1.amazonaws.com/wwia/fake/tvcropxLong20fps.mp4" ]

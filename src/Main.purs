@@ -183,20 +183,26 @@ makeGradient w colors rot realDim outf =
       ]
 
 runFFMpeg :: Array String -> Aff Unit
-runFFMpeg args = do
+runFFMpeg = runBin "ffmpeg"
+
+runMagick :: Array String -> Aff Unit
+runMagick = runBin "magick"
+
+runBin :: String -> Array String -> Aff Unit
+runBin cmd args = do
   (log <<< show) args
   when (not dryRun) do
     { exit, stderr, stdout } <-
       S.spawn
-        { cmd: "ffmpeg"
+        { cmd
         , args
         , stdin: Nothing
         }
         CP.defaultSpawnOptions
     case exit of
       Normally 0 -> pure unit
-      Normally n -> throwError (error $ "Non-zero exit of ffmpeg " <> stderr <> " " <> stdout)
-      _ -> throwError (error $ "Non-zero exit of ffmpeg " <> stderr <> " " <> stdout)
+      Normally n -> throwError (error $ "Non-zero exit of " <> cmd <> " " <> stderr <> " " <> stdout)
+      _ -> throwError (error $ "Non-zero exit of " <> cmd <> " " <> stderr <> " " <> stdout)
 
 ffmpegSingleFrame :: String -> String -> Int -> Int -> Number -> Int -> Aff Unit
 ffmpegSingleFrame odr file v i start yOffset = do
@@ -222,30 +228,29 @@ ffmpegSoloFrame i = do
         true
   runFFMpeg args
 
+ffmpegSoloFrameToStandAlone :: Int -> Aff Unit
+ffmpegSoloFrameToStandAlone i = do
+  let
+    args =
+      [ "-i"
+      , "z/media/wwia." <> show i <> ".png"
+      , "-q:v"
+      , "10"
+      , "z/wwia." <> show i <> ".jpg"
+      ]
+  runFFMpeg args
+
 imageMagickScale :: Boolean -> String -> String -> Int -> Int -> Aff Unit
 imageMagickScale fromFinal odr file v i = do
   let
     args =
-      [ (if fromFinal then finalJpg else outJpg) odr file v i
+      [ (if fromFinal then finalPng else outJpg) odr file v i
       , "-scale"
       , show vScale <> "x" <> show vScale
-      , finalJpg odr file v i
+      , finalPng odr file v i
       ]
   (log <<< show) args
-  when (not dryRun) do
-    { exit, stdout, stderr } <-
-      S.spawn
-        { cmd: "magick"
-        , args
-        , stdin: Nothing
-        }
-        CP.defaultSpawnOptions
-    case exit of
-      Normally 0 -> pure unit
-      Normally n -> do
-        log (stdout <> " " <> stderr)
-        throwError (error $ "Non-zero exit of magick: " <> show n)
-      _ -> throwError (error "Non-zero exit of magick")
+  runMagick args
 
 imageMagickDissolve :: String -> String -> Int -> Int -> Int -> Aff Unit
 imageMagickDissolve odr file v i pct = do
@@ -256,24 +261,10 @@ imageMagickDissolve odr file v i pct = do
       , show pct
       , (outGrad odr file v i)
       , (outJpg odr file v i)
-      , (finalJpg odr file v i)
+      , (finalPng odr file v i)
       ]
   (log <<< show) args
-  when (not dryRun) do
-    { exit, stderr, stdout } <-
-      S.spawn
-        { cmd: "magick"
-        -- offset the time by 2 seconds in the position function
-        , args
-        , stdin: Nothing
-        }
-        CP.defaultSpawnOptions
-    case exit of
-      Normally 0 -> pure unit
-      Normally n -> do
-        log (stdout <> " " <> stderr)
-        throwError (error $ "Non-zero exit of magick: " <> show n)
-      _ -> throwError (error "Non-zero exit of magick")
+  runMagick args
 
 imageMagickGradient :: Color -> Color -> String -> String -> Int -> Int -> Aff Unit
 imageMagickGradient startColor endColor odr file v i = do
@@ -305,6 +296,12 @@ imageMagickGradient startColor endColor odr file v i = do
 
 voices :: Voices
 voices v = case v of
+  -- hack
+  Solo ->
+    { yOffset: -1
+    , file: ""
+    , markers: \_ -> { start: 0.0, v: 0 }
+    }
   Bv0 ->
     { yOffset: 280
     , file: "media/0.mp4"
@@ -349,8 +346,8 @@ voices v = case v of
 outJpg :: forall v i. Show v => Show i => String -> String -> v -> i -> String
 outJpg odr file v i = odr <> "/" <> file <> "." <> show v <> "." <> show i <> ".png"
 
-finalJpg :: forall v i. Show v => Show i => String -> String -> v -> i -> String
-finalJpg odr file v i = odr <> "/" <> file <> "." <> show v <> "." <> show i <> ".final.png"
+finalPng :: forall v i. Show v => Show i => String -> String -> v -> i -> String
+finalPng odr file v i = odr <> "/" <> file <> "." <> show v <> "." <> show i <> ".final.png"
 
 outGrad :: forall v i. Show v => Show i => String -> String -> v -> i -> String
 outGrad odr file v i = odr <> "/" <> file <> "." <> show v <> "." <> show i <> ".gradient.png"
@@ -371,18 +368,18 @@ mergeVoicesAndCleanSingleFrame b i = do
         CP.defaultSpawnOptions
     case exit of
       Normally 0 -> do
-        for_ finalJpgs \f -> liftEffect $ FS.unlink f
+        for_ finalPngs \f -> liftEffect $ FS.unlink f
         liftEffect $ FS.unlink wwiaFile
         pure unit
       Normally n -> throwError (error $ "Non-zero exit of ffmpeg " <> stderr <> " " <> stdout)
       _ -> throwError (error $ "Non-zero exit of ffmpeg " <> stderr <> " " <> stdout)
   where
-  finalJpgs = A.fromFoldable $ map (\a -> let { file } = voices a in finalJpg outdir file (markerToIdx b) i) backgroundVoices
+  finalPngs = A.fromFoldable $ map (\a -> let { file } = voices a in finalPng outdir file (markerToIdx b) i) backgroundVoices
 
   wwiaFile = "z/media/wwia." <> show (markerToIdx b * framesInSection + i) <> ".png"
 
   args =
-    (join (map (\a -> [ "-i", a ]) finalJpgs))
+    (join (map (\a -> [ "-i", a ]) finalPngs))
       <> [ "-i"
         , wwiaFile
         , "-filter_complex"
@@ -438,6 +435,15 @@ main =
               FS.mkdir outdir
               FS.mkdir $ outdir <> "/media"
       )
+    -- solo images
+    for_ (L.range 0 endpt) \i ->
+      for_ (L.range 14 20) \j -> do
+        let
+          frame = j * framesInSection + i
+        ffmpegSoloFrame frame
+        ffmpegSoloFrameToStandAlone frame
+        liftEffect $ FS.unlink ("z/media/wwia." <> show frame <> ".png")
+    -- full images
     for_ (L.range 0 endpt) \i ->
       for_ backgroundNotes \marker -> do
         for_ backgroundVoices \voice ->
