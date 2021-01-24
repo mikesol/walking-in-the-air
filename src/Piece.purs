@@ -31,6 +31,7 @@ import Data.Tuple (Tuple(..), fst, snd)
 import Data.Typelevel.Num (D2, D8, d0, d1, d2, d3, d4, d5, d6, d7)
 import Data.Vec (Vec, (+>), empty)
 import Data.Vec as V
+--import Debug.Trace (spy)
 import Effect (Effect)
 import Effect.Now (now)
 import Effect.Ref as Ref
@@ -40,7 +41,7 @@ import FRP.Event (Event, makeEvent, subscribe)
 import Graphics.Canvas (Rectangle)
 import Graphics.Drawing (Color, Font, Point)
 import Graphics.Drawing.Font (bold, font, sansSerif)
-import Graphics.Painting (Gradient(..), ImageSource(..), MeasurableText, Painting, circle, drawImageFull, fillColor, fillGradient, filled, rectangle, rotate, text, textMeasurableText, translate)
+import Graphics.Painting (Gradient(..), ImageSource(..), MeasurableText, Painting, FillStyle, circle, drawImageFull, fillColor, fillGradient, filled, rectangle, rotate, scale, text, textMeasurableText, translate)
 import Klank.Dev.Util (makeBuffersKeepingCache, makeImagesKeepingCache)
 import Math (pi, pow, sin, (%))
 import Type.Klank.Dev (Klank', defaultEngineInfo, klank)
@@ -144,9 +145,12 @@ sectionLen = measure * 9.0 :: Number
 
 introLen = measure * 6.0 :: Number
 
-touchableStarts = measure * 4.0 :: Number
+-- used to be 4.0, but led to sensation that a touch didn't cause anything
+touchableStarts = measure * 2.0 :: Number
 
 singingStarts = measure * 2.0 :: Number
+
+soloVideoStarts = firstVerseStarts - measure :: Number
 
 firstVerseStarts = introLen :: Number
 
@@ -444,6 +448,7 @@ normalPositions w h v =
       Bv5 -> { x: 0.0, y: 2.0 * height, width, height }
       Bv6 -> { x: width, y: 2.0 * height, width, height }
       Bv7 -> { x: 2.0 * width, y: 2.0 * height, width, height }
+      Solo -> { x: width, y: height, width, height }
 
 positionsWithRoomForInstruments :: Number -> Number -> BackgroundVoice -> Rectangle
 positionsWithRoomForInstruments w h v =
@@ -456,19 +461,65 @@ positionsWithRoomForInstruments w h v =
 
     height = h * 2.0 / 9.0
 
-    instrwOver2 = w / 12.0
+    fullW = w / 3.0
 
-    instrhOver2 = h / 12.0
+    fullH = h / 3.0
   in
     case v of
-      Bv0 -> { x: 0.0, y: 0.0, width, height }
-      Bv1 -> { x: width + instrwOver2, y: 0.0, width, height }
-      Bv2 -> { x: 2.0 * width + instrwOver2, y: 0.0, width, height }
-      Bv3 -> { x: 0.0, y: height + instrhOver2, width, height }
-      Bv4 -> { x: 2.0 * width + instrwOver2, y: height + instrhOver2, width, height }
-      Bv5 -> { x: 0.0, y: 2.0 * height + instrhOver2, width, height }
-      Bv6 -> { x: width + instrwOver2, y: 2.0 * height + instrhOver2, width, height }
-      Bv7 -> { x: 2.0 * width + instrwOver2, y: 2.0 * height, width, height }
+      Bv0 ->
+        { x: 0.0
+        , y: 0.0
+        , width
+        , height
+        }
+      Bv1 ->
+        { x: width + instrw
+        , y: 0.0
+        , width
+        , height
+        }
+      Bv2 ->
+        { x: 2.0 * (width + instrw)
+        , y: 0.0
+        , width
+        , height
+        }
+      Bv3 ->
+        { x: 0.0
+        , y: (height + instrh)
+        , width
+        , height
+        }
+      Bv4 ->
+        { x: 2.0 * (width + instrw)
+        , y: (height + instrh)
+        , width
+        , height
+        }
+      Bv5 ->
+        { x: 0.0
+        , y: 2.0 * (height + instrh)
+        , width
+        , height
+        }
+      Bv6 ->
+        { x: width + instrw
+        , y: 2.0 * (height + instrh)
+        , width
+        , height
+        }
+      Bv7 ->
+        { x: 2.0 * (width + instrw)
+        , y: 2.0 * (height + instrh)
+        , width
+        , height
+        }
+      Solo ->
+        { x: (width + instrw)
+        , y: (height + instrh)
+        , width
+        , height
+        }
 
 positionsWithRoomForFlute :: Number -> Number -> BackgroundVoice -> Rectangle
 positionsWithRoomForFlute w h v =
@@ -490,6 +541,7 @@ positionsWithRoomForFlute w h v =
       Bv5 -> { x: instrw, y: 2.0 * height + instrh, width, height }
       Bv6 -> { x: width + instrw, y: 2.0 * height + instrh, width, height }
       Bv7 -> { x: 2.0 * width + instrw, y: 2.0 * height + instrh, width, height }
+      Solo -> { x: width + instrw, y: height + instrh, width, height }
 
 interpolateRectangles :: Number -> Number -> Number -> Rectangle -> Rectangle -> Rectangle
 interpolateRectangles n0 n1 t r0 r1 =
@@ -500,10 +552,8 @@ interpolateRectangles n0 n1 t r0 r1 =
   }
 
 backgroundVideoCoords :: Number -> Number -> Number -> BackgroundVoice -> Rectangle
-backgroundVideoCoords w h n v = f'
+backgroundVideoCoords w h n v = f
   where
-  f' = normalPositions w h v
-
   f
     | n < secondVerseStarts = normalPositions w h v
     | n < instrumentsFullyFadedIn =
@@ -856,6 +906,45 @@ fluteCoords w h n v
 bindBetween :: Number -> Number -> Number -> Number
 bindBetween mn mx n = max mn (min mx n)
 
+soloVideo :: (BackgroundVoice -> Rectangle) -> Number -> Painting
+soloVideo bvCoords time =
+  let
+    normalizedTime = time - soloVideoStarts
+
+    -- todo: render new images for trailing portion
+    leadingCoord
+      | normalizedTime >= 0.0 = min 13 (floor (normalizedTime / (2.0 * measure)))
+      | otherwise = 0
+
+    trailingCoord
+      | normalizedTime >= 0.0 = floor ((normalizedTime - (toNumber leadingCoord * 2.0 * measure)) * fps)
+      | otherwise = 0
+
+    -- todo: code dup with background video function
+    -- would be good to combine
+    videoCoords = bvCoords Solo
+
+    bkg
+      | normalizedTime < measure =
+        filled
+          ( fillColor
+              (rgba 0 0 0 (max 0.0 (min 1.0 (calcSlope 0.0 1.0 measure 0.0 normalizedTime))))
+          )
+          (rectangle videoCoords.x videoCoords.y videoCoords.width videoCoords.height)
+      | otherwise = mempty
+
+    whRatio = videoCoords.width / videoCoords.height
+
+    wcrop = if whRatio > 1.0 then videoWidth else whRatio * videoHeight
+
+    resizeInfo = resizeVideo videoWidth videoHeight videoCoords.width videoCoords.height
+
+    img = FromImage { name: show leadingCoord <> "." <> show trailingCoord <> ".mosaic" }
+
+    out = drawImageFull img (resizeInfo.x + (voiceToWidth Solo)) (resizeInfo.y + (voiceToHeight Solo)) resizeInfo.sWidth resizeInfo.sHeight videoCoords.x videoCoords.y videoCoords.width videoCoords.height <> bkg
+  in
+    out
+
 backgroundEventsToVideo :: BackgroundVoice -> (BackgroundVoice -> Rectangle) -> List BackgroundEventInfo -> Number -> Painting
 backgroundEventsToVideo v bvCoords Nil time = mempty
 
@@ -871,13 +960,8 @@ backgroundEventsToVideo v bvCoords (a : _) time =
 
     resizeInfo = resizeVideo videoWidth videoHeight videoCoords.width videoCoords.height
 
-    --______________________ = case v of
-    --  Bv0 -> spy ("ct") (time - currentEvent.onset)
-    --  _ -> 3.1416
-    -- img = FromVideo { name: show v <> show currentEvent.note, currentTime: Just $ time - currentEvent.onset }
     img = FromImage { name: timeToBackgroundFrame currentEvent.note (time - currentEvent.onset) }
 
-    -- out = drawImage img' 0.0 0.0
     out = drawImageFull img (resizeInfo.x + (voiceToWidth v)) (resizeInfo.y + (voiceToHeight v)) resizeInfo.sWidth resizeInfo.sHeight videoCoords.x videoCoords.y videoCoords.width videoCoords.height
   in
     out
@@ -885,8 +969,8 @@ backgroundEventsToVideo v bvCoords (a : _) time =
 synthEventToVideo :: SynthVoice -> Number -> Rectangle -> Painting
 synthEventToVideo v energy a =
   filled
-    ( fillGradient
-        (energyToGradient a (synthVoiceToBaseRGB v) energy)
+    ( fillColor
+        (energyToColor a (synthVoiceToBaseRGB v) energy)
     )
     (rectangle a.x a.y a.width a.height)
 
@@ -1012,27 +1096,10 @@ fluteHistoryToAudioUnit l@(a : b) time =
         , minTime: x.onset
         }
 
-unselectedFluteColor :: Number -> Rectangle -> FluteNote -> Gradient
-unselectedFluteColor time rect v =
-  let
-    (RGB r g b) = fluteNoteToRGB v
+unselectedFluteColor :: Number -> Rectangle -> FluteNote -> FillStyle
+unselectedFluteColor time rect v = fillColor (rgba 255 255 255 0.0)
 
-    halfX = (rect.x + rect.width) / 2.0
-  in
-    LinearGradient { x0: halfX, y0: rect.y, x1: halfX, y1: rect.height }
-      ( { color: rgb r g b
-        , position: 0.5 + 0.5 * sin (0.3 * pi * (time + fluteNoteToPeriod v))
-        }
-          : { color: rgb r g (b - 15)
-            , position: 0.5 + 0.5 * sin (0.3 * pi * (time + 0.66 + fluteNoteToPeriod v))
-            }
-          : { color: rgb (r + 15) g b
-            , position: 0.5 + 0.5 * sin (0.3 * pi * (time + 1.33 + fluteNoteToPeriod v))
-            }
-          : Nil
-      )
-
-selectedFluteColor :: Number -> Rectangle -> FluteNote -> Gradient
+selectedFluteColor :: Number -> Rectangle -> FluteNote -> FillStyle
 selectedFluteColor time' rect v =
   let
     (RGB r g b) = fluteNoteToRGB v
@@ -1041,24 +1108,25 @@ selectedFluteColor time' rect v =
 
     time = time' `pow` 2.0
   in
-    LinearGradient { x0: halfX, y0: rect.y, x1: halfX, y1: rect.height }
-      ( { color: rgb r g b
-        , position: 0.5 + 0.5 * sin (2.3 * pi * (time + fluteNoteToPeriod v))
-        }
-          : { color: rgb 255 255 255
-            , position: 0.5 + 0.5 * sin (2.3 * pi * (time + 0.4 + fluteNoteToPeriod v))
+    fillGradient
+      $ LinearGradient { x0: halfX, y0: rect.y, x1: halfX, y1: rect.height }
+          ( { color: rgb r g b
+            , position: 0.5 + 0.5 * sin (2.3 * pi * (time + fluteNoteToPeriod v))
             }
-          : { color: rgb r g (b - 15)
-            , position: 0.5 + 0.5 * sin (2.3 * pi * (time + 0.8 + fluteNoteToPeriod v))
-            }
-          : { color: rgb 255 255 255
-            , position: 0.5 + 0.5 * sin (2.3 * pi * (time + 1.2 + fluteNoteToPeriod v))
-            }
-          : { color: rgb (r + 15) g b
-            , position: 0.5 + 0.5 * sin (2.3 * pi * (time + 1.6 + fluteNoteToPeriod v))
-            }
-          : Nil
-      )
+              : { color: rgb 255 255 255
+                , position: 0.5 + 0.5 * sin (2.3 * pi * (time + 0.4 + fluteNoteToPeriod v))
+                }
+              : { color: rgb r g (b - 15)
+                , position: 0.5 + 0.5 * sin (2.3 * pi * (time + 0.8 + fluteNoteToPeriod v))
+                }
+              : { color: rgb 255 255 255
+                , position: 0.5 + 0.5 * sin (2.3 * pi * (time + 1.2 + fluteNoteToPeriod v))
+                }
+              : { color: rgb (r + 15) g b
+                , position: 0.5 + 0.5 * sin (2.3 * pi * (time + 1.6 + fluteNoteToPeriod v))
+                }
+              : Nil
+          )
 
 fluteHistoryToVideo :: (FluteNote -> Maybe Rectangle) -> List FluteAccumulatorInfo -> Number -> List Painting
 fluteHistoryToVideo f l time =
@@ -1078,14 +1146,13 @@ fluteHistoryToVideo f l time =
   go sel (Tuple fn (Just a) : b) acc =
     go sel b
       ( filled
-          ( fillGradient
-              $ ( case sel of
-                    Nothing -> unselectedFluteColor
-                    Just x -> if x == fn then selectedFluteColor else unselectedFluteColor
-                )
-                  time
-                  a
-                  fn
+          ( ( case sel of
+                Nothing -> unselectedFluteColor
+                Just x -> if x == fn then selectedFluteColor else unselectedFluteColor
+            )
+              time
+              a
+              fn
           )
           (rectangle a.x a.y a.width a.height)
           : acc
@@ -1099,6 +1166,8 @@ modFluteHistory f acc' time notes = go notes acc'
   go Nil acc = acc
 
   go (a : b) acc = go b (if f a then { onset: time, note: a } : acc else acc)
+
+energyF = 1.5 :: Number
 
 env :: Env -> RenderInfo
 env e =
@@ -1214,7 +1283,10 @@ env e =
         in
           case prevEvent of
             Nothing -> if not isTouched then Nothing else Just { energy: kr, note: synthNoteAt e.time }
-            Just { energy, note } -> if not isTouched && energy - kr <= 0.0 then Nothing else Just { energy: energy - kr, note }
+            Just { energy, note }
+              | not isTouched && energy - kr <= 0.0 -> Nothing
+              | not isTouched -> Just { energy: energy - (kr / energyF), note }
+              | otherwise -> Just { energy: energy + (kr / energyF), note }
 
     synthRenderingInfo =
       map
@@ -1245,7 +1317,11 @@ env e =
 
     fluteHistory = modFluteHistory isFluteTouched e.accumulator.fluteHistory e.time fluteNotes
 
-    stars = translate (e.canvas.w / 2.0) (e.canvas.h / 2.0) (rotate (e.time * pi / 180.0) (translate (e.canvas.w / -2.0) (e.canvas.h / -2.0) (drawImageFull (FromImage { name: "stars" }) 0.0 0.0 starsW starsH 0.0 0.0 starsW starsH)))
+    scaleF = 1.5
+
+    stars = translate (e.canvas.w / 2.0) (e.canvas.h / 2.0) (rotate (e.time * pi / 180.0) (scale scaleF scaleF (translate (scaleF * e.canvas.w / -2.0) (scaleF * e.canvas.h / -2.0) (drawImageFull (FromImage { name: "stars" }) 0.0 0.0 starsW starsH 0.0 0.0 starsW starsH))))
+
+    solo = soloVideo bvCoords e.time
 
     fadeIn wwiaWidth
       | e.time < singingStarts = filled (fillColor (rgb 0 0 0)) (rectangle 0.0 0.0 e.canvas.w e.canvas.h) <> wwiaT ((e.canvas.w - wwiaWidth) / 2.0) (e.canvas.h / 2.0) 1.0
@@ -1270,6 +1346,7 @@ env e =
           fold
             ( stars
                 : fold (map _.v backgroundRenderingInfo)
+                : solo
                 : fold (L.catMaybes (map _.v synthRenderingInfo))
                 : bellsToVisual bells e.time
                 : fold (fluteHistoryToVideo fCoords fluteHistory e.time)
@@ -1290,7 +1367,7 @@ env e =
         }
     }
 
-wereWalkingOnTheAir = "We're walking on the air" :: String
+wereWalkingOnTheAir = "We're walking in the air" :: String
 
 wereWalkingOnTheAirFont = font sansSerif 30 bold :: Font
 
@@ -1347,6 +1424,7 @@ voiceToWidth bv = case bv of
   Bv5 -> 0.0
   Bv6 -> videoWidth
   Bv7 -> videoWidth * 2.0
+  Solo -> videoWidth
 
 voiceToHeight :: BackgroundVoice -> Number
 voiceToHeight bv = case bv of
@@ -1358,6 +1436,7 @@ voiceToHeight bv = case bv of
   Bv5 -> videoHeight * 2.0
   Bv6 -> videoHeight * 2.0
   Bv7 -> videoHeight * 2.0
+  Solo -> videoHeight
 
 toTime :: BackgroundNote -> Int -> Number
 toTime bn i = x + (toNumber i / 30.0)
@@ -1455,6 +1534,7 @@ data BackgroundVoice
   | Bv5
   | Bv6
   | Bv7
+  | Solo
 
 derive instance backgroundVoiceGeneric :: Generic BackgroundVoice _
 
@@ -1471,6 +1551,7 @@ newtype BackgroundVoice' a
   , bv5 :: a
   , bv6 :: a
   , bv7 :: a
+  , solo :: a
   }
 
 class Memoizable f g | f -> g, g -> f where
@@ -1488,6 +1569,7 @@ instance memoizableBackgroundVoice :: Memoizable BackgroundVoice BackgroundVoice
       , bv5: f Bv5
       , bv6: f Bv6
       , bv7: f Bv7
+      , solo: f Solo
       }
   functionize (BackgroundVoice' { bv0 }) Bv0 = bv0
   functionize (BackgroundVoice' { bv1 }) Bv1 = bv1
@@ -1497,7 +1579,9 @@ instance memoizableBackgroundVoice :: Memoizable BackgroundVoice BackgroundVoice
   functionize (BackgroundVoice' { bv5 }) Bv5 = bv5
   functionize (BackgroundVoice' { bv6 }) Bv6 = bv6
   functionize (BackgroundVoice' { bv7 }) Bv7 = bv7
+  functionize (BackgroundVoice' { solo }) Solo = solo
 
+-- omit solo, which gets different treatment
 backgroundVoices :: List BackgroundVoice
 backgroundVoices = Bv0 : Bv1 : Bv2 : Bv3 : Bv4 : Bv5 : Bv6 : Bv7 : Nil
 
@@ -1586,19 +1670,21 @@ rectanglePeriod x0 y0 x1 y1 energy = go (energy % 1.0)
     | t < 0.5 + pt0 = let xp = (x1 - x0) * (t - 0.5) / pt0 in { x0: x1 - xp, y0: y1, x1: x0 + xp, y1: y0 }
     | otherwise = let yp = (y1 - y0) * (t - 0.5 - pt0) / (0.5 - pt0) in { x0, y0: y1 - yp, x1, y1: y0 + yp }
 
-energyToGradient :: Rectangle -> RGB -> Number -> Gradient
-energyToGradient { x, y, width, height } (RGB r g b) energy =
-  let
-    { x0, y0, x1, y1 } = rectanglePeriod x y (x + width) (y + height) energy
-  in
-    LinearGradient
-      { x0, y0, x1, y1
-      }
-      ( map
-          (\i' -> let i = toNumber i' in { color: rgba ((r + floor (i * energy)) `mod` 256) ((g - floor (i * energy)) `mod` 256) ((b + floor (i * energy)) `mod` 256) 0.0, position: 0.5 + 0.5 * sin (pi * (energy + i / 5.0)) })
-          (L.range 0 9)
-      )
+energyToColor :: Rectangle -> RGB -> Number -> Color
+energyToColor _ (RGB r g b) energy = rgba r g b (max 0.0 (min 1.0 energy))
 
+--energyToGradient :: Rectangle -> RGB -> Number -> Gradient
+--energyToGradient { x, y, width, height } (RGB r g b) energy =
+--  let
+--    { x0, y0, x1, y1 } = rectanglePeriod x y (x + width) (y + height) energy
+--  in
+--    LinearGradient
+--      { x0, y0, x1, y1
+--      }
+--      ( map
+--          (\i' -> let i = toNumber i' in { color: rgba ((r + floor (i * energy)) `mod` 256) ((g - floor (i * energy)) `mod` 256) ((b + floor (i * energy)) `mod` 256) 0.0, position: 0.5 + 0.5 * sin (pi * (energy + i / 5.0)) })
+--          (L.range 0 9)
+--      )
 newtype SynthVoice' a
   = SynthVoice'
   { sv0 :: a
