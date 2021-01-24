@@ -40,7 +40,7 @@ import FRP.Event (Event, makeEvent, subscribe)
 import Graphics.Canvas (Rectangle)
 import Graphics.Drawing (Color, Font, Point)
 import Graphics.Drawing.Font (bold, font, sansSerif)
-import Graphics.Painting (Gradient(..), ImageSource(..), MeasurableText, Painting, circle, drawImageFull, fillColor, fillGradient, filled, rectangle, text, textMeasurableText)
+import Graphics.Painting (Gradient(..), ImageSource(..), MeasurableText, Painting, circle, drawImageFull, fillColor, fillGradient, filled, rectangle, rotate, text, textMeasurableText, translate)
 import Klank.Dev.Util (makeBuffersKeepingCache, makeImagesKeepingCache)
 import Math (pi, pow, sin, (%))
 import Type.Klank.Dev (Klank', defaultEngineInfo, klank)
@@ -56,6 +56,10 @@ import Web.TouchEvent.TouchEvent as TE
 import Web.TouchEvent.TouchList as TL
 import Web.UIEvent.MouseEvent (MouseEvent)
 import Web.UIEvent.MouseEvent as ME
+
+starsW = 1024.0 :: Number
+
+starsH = 656.0 :: Number
 
 fluteNoteToRGB :: FluteNote -> RGB
 fluteNoteToRGB fn = case fn of
@@ -1241,6 +1245,8 @@ env e =
 
     fluteHistory = modFluteHistory isFluteTouched e.accumulator.fluteHistory e.time fluteNotes
 
+    stars = translate (e.canvas.w / 2.0) (e.canvas.h / 2.0) (rotate (e.time * pi / 180.0) (translate (e.canvas.w / -2.0) (e.canvas.h / -2.0) (drawImageFull (FromImage { name: "stars" }) 0.0 0.0 starsW starsH 0.0 0.0 starsW starsH)))
+
     fadeIn wwiaWidth
       | e.time < singingStarts = filled (fillColor (rgb 0 0 0)) (rectangle 0.0 0.0 e.canvas.w e.canvas.h) <> wwiaT ((e.canvas.w - wwiaWidth) / 2.0) (e.canvas.h / 2.0) 1.0
       | e.time < firstVerseStarts = let opq = (calcSlope singingStarts 1.0 firstVerseStarts 0.0 e.time) in filled (fillColor (rgba 0 0 0 opq)) (rectangle 0.0 0.0 e.canvas.w e.canvas.h) <> wwiaT ((e.canvas.w - wwiaWidth) / 2.0) (e.canvas.h / 2.0) opq
@@ -1262,7 +1268,8 @@ env e =
     , visual:
         \words ->
           fold
-            ( fold (map _.v backgroundRenderingInfo)
+            ( stars
+                : fold (map _.v backgroundRenderingInfo)
                 : fold (L.catMaybes (map _.v synthRenderingInfo))
                 : bellsToVisual bells e.time
                 : fold (fluteHistoryToVideo fCoords fluteHistory e.time)
@@ -1430,7 +1437,7 @@ main =
         ( [ Tuple "bell" "https://freesound.org/data/previews/439/439616_737466-hq.mp3", Tuple "backgroundWind" "https://freesound.org/data/previews/244/244942_263745-lq.mp3" ]
             <> (A.fromFoldable <<< join) (map (\v -> map (\n -> let name = show v <> show n in Tuple name ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/fake/" <> name <> ".ogg")) backgroundNotes) backgroundVoices)
         )
-    , images = makeImagesKeepingCache 20 (join $ map (\bn -> map (\i -> let name = asMosaicString bn i in Tuple name ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/real/backgroundPortrait/" <> name <> ".jpg")) (A.range 0 (framesInSection - 1))) (A.fromFoldable backgroundNotes))
+    , images = makeImagesKeepingCache 20 ([ Tuple "stars" "https://klank-share.s3-eu-west-1.amazonaws.com/wwia/real/stars.jpg" ] <> join (map (\bn -> map (\i -> let name = asMosaicString bn i in Tuple name ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/real/background2Portrait/" <> name <> ".jpg")) (A.range 0 (framesInSection - 1))) (A.fromFoldable backgroundNotes)))
     --, images =
     --  makePooledImagesFromCanvasesKeepingCache 20
     --    { videos: [ Tuple "vid" "https://klank-share.s3-eu-west-1.amazonaws.com/wwia/fake/tvcropxLong20fps.mp4" ]
@@ -1588,7 +1595,7 @@ energyToGradient { x, y, width, height } (RGB r g b) energy =
       { x0, y0, x1, y1
       }
       ( map
-          (\i' -> let i = toNumber i' in { color: rgb ((r + floor (i * energy)) `mod` 256) ((g - floor (i * energy)) `mod` 256) ((b + floor (i * energy)) `mod` 256), position: 0.5 + 0.5 * sin (pi * (energy + i / 5.0)) })
+          (\i' -> let i = toNumber i' in { color: rgba ((r + floor (i * energy)) `mod` 256) ((g - floor (i * energy)) `mod` 256) ((b + floor (i * energy)) `mod` 256) 0.0, position: 0.5 + 0.5 * sin (pi * (energy + i / 5.0)) })
           (L.range 0 9)
       )
 
