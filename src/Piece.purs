@@ -28,7 +28,7 @@ import Data.Set as S
 import Data.String (indexOf, Pattern(..))
 import Data.Symbol (SProxy(..))
 import Data.Tuple (Tuple(..), fst, snd)
-import Data.Typelevel.Num (D2, D8, d0, d1, d2, d3, d4, d5, d6, d7)
+import Data.Typelevel.Num (class Pos, D2, D8, d0, d1, d2, d3, d4, d5, d6, d7)
 import Data.Vec (Vec, (+>), empty)
 import Data.Vec as V
 import Effect (Effect)
@@ -857,6 +857,18 @@ toNel Nil = mempty :| Nil
 
 toNel (a : b) = a :| b
 
+voiceToIdx :: BackgroundVoice -> Int
+voiceToIdx v = case v of
+  Bv0 -> 0
+  Bv1 -> 1
+  Bv2 -> 2
+  Bv3 -> 3
+  Bv4 -> 4
+  Bv5 -> 5
+  Bv6 -> 6
+  Bv7 -> 7
+  Solo -> -1
+
 markerToIdx :: BackgroundNote -> Int
 markerToIdx n = case n of
   Nt0 -> 0
@@ -1399,12 +1411,14 @@ wwiaT x y a =
     (fillColor (rgba 255 255 255 a))
     wereWalkingOnTheAir
 
+bkgAudioWhenReady = playBuf_ "backgroundWind" "backgroundWind" 1.0 :: forall ch. Pos ch => AudioUnit ch
+
 scene :: Interactions -> WAccumulator -> CanvasInfo -> Number -> Behavior (AV D2 WAccumulator)
 scene inter acc (CanvasInfo { w, h, boundingClientRect }) time = go <$> interactionLog inter
   where
   go { interactions } =
     AV
-      { audio: Just (speaker (playBuf_ "backgroundWind" "backgroundWind" 1.0 :| audio))
+      { audio: Just (speaker (zero :| audio))
       , visual:
           Just
             { painting: \{ words } -> visual words
@@ -1527,7 +1541,22 @@ main =
     , buffers =
       makeBuffersKeepingCache 20
         ( [ Tuple "bell" "https://freesound.org/data/previews/439/439616_737466-hq.mp3", Tuple "backgroundWind" "https://freesound.org/data/previews/244/244942_263745-lq.mp3" ]
-            <> (A.fromFoldable <<< join) (map (\v -> map (\n -> let name = show v <> show n in Tuple name ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/fake/" <> name <> ".ogg")) backgroundNotes) backgroundVoices)
+            <> (A.fromFoldable <<< join)
+                ( map
+                    ( \v ->
+                        map
+                          ( \n ->
+                              let
+                                name' = show (voiceToIdx v) <> "." <> show (min 2 $ markerToIdx n) <> ".eq.ogg" {-(markerToIdx n)-}
+
+                                name = show v <> show n
+                              in
+                                Tuple name ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/real/bkgv/eq/" <> name')
+                          )
+                          backgroundNotes
+                    )
+                    backgroundVoices
+                )
         )
     , images = makeImagesKeepingCache 20 (map (\i -> (Tuple ("wwia." <> show i) ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/real/solo/wwia." <> show i <> ".jpg"))) (A.range (14 * (floor $ 2.0 * measure * fps)) (21 * (floor $ 2.0 * measure * fps) - 1)) <> join (map (\bn -> map (\i -> let name = asMosaicString bn i in Tuple name ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/real/background2Portrait/" <> name <> ".jpg")) (A.range 0 (framesInSection - 1))) (A.fromFoldable backgroundNotes)))
     --, images =
