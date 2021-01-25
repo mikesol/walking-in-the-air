@@ -1547,7 +1547,7 @@ main =
                         map
                           ( \n ->
                               let
-                                name' = show (voiceToIdx v) <> "." <> show (min 2 $ markerToIdx n) <> ".eq.ogg" {-(markerToIdx n)-}
+                                name' = show (voiceToIdx v) <> "." <> show (markerToIdx n `mod` 2) <> ".eq.ogg" {-(markerToIdx n)-}
 
                                 name = show v <> show n
                               in
