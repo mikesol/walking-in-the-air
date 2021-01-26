@@ -35,7 +35,7 @@ import Effect (Effect)
 import Effect.Now (now)
 import Effect.Ref as Ref
 import FRP.Behavior (Behavior, behavior)
-import FRP.Behavior.Audio (AV(..), AudioUnit, CanvasInfo(..), EngineInfo, defaultExporter, defaultParam, gain_', pannerMono_, playBufT_, playBuf_, runInBrowser_, sinOsc_, speaker)
+import FRP.Behavior.Audio (AV(..), AudioUnit, CanvasInfo(..), EngineInfo, defaultExporter, defaultParam, gain_', pannerMono_, playBufT_, playBufWithOffset_, playBuf_, runInBrowser_, sinOsc_, speaker)
 import FRP.Event (Event, makeEvent, subscribe)
 import Graphics.Canvas (Rectangle)
 import Graphics.Drawing (Color, Font, Point)
@@ -252,6 +252,7 @@ type WAccumulator
     , bellsLoop :: CofreeList (Number -> Number)
     , fluteHistory :: List FluteAccumulatorInfo
     , prevClicks :: Set Int
+    , curBackgroundNote :: BackgroundNote
     }
 
 type RenderInfo
@@ -1179,6 +1180,40 @@ fluteHistoryToVideo f l time =
 
   go sel (_ : b) acc = go sel b acc
 
+defaultBuddies :: BackgroundVoice -> List BackgroundVoice
+defaultBuddies = case _ of
+  Bv0 -> Bv0 : Bv1 : Bv2 : Bv4 : Nil
+  Bv1 -> Bv1 : Bv5 : Nil
+  Bv2 -> Bv2 : Bv4 : Bv6 : Nil
+  Bv3 -> Bv3 : Bv4 : Bv5 : Bv7 : Nil
+  Bv4 -> Bv4 : Bv5 : Bv7 : Nil
+  Bv5 -> Bv0 : Bv1 : Bv2 : Bv3 : Bv4 : Bv5 : Bv6 : Bv7 : Nil
+  Bv6 -> Bv3 : Bv4 : Bv6 : Nil
+  Bv7 -> Bv1 : Bv3 : Bv7 : Nil
+  Solo -> Nil
+
+buddies :: BackgroundNote -> BackgroundVoice -> List BackgroundVoice
+buddies bn = case bn of
+  Nt0 -> defaultBuddies
+  Nt1 -> defaultBuddies
+  Nt2 -> defaultBuddies
+  Nt3 -> defaultBuddies
+  Nt4 -> defaultBuddies
+  Nt5 -> defaultBuddies
+  Nt6 -> pure
+  Nt7 -> pure
+  Nt8 -> pure
+  Nt9 -> pure
+  Nt10 -> defaultBuddies
+  Nt11 -> defaultBuddies
+  Nt12 -> defaultBuddies
+  Nt13 -> defaultBuddies
+
+firstPred :: forall a. (a -> Boolean) -> List a -> Boolean
+firstPred _ Nil = false
+
+firstPred f (a : b) = f a || firstPred f b
+
 modFluteHistory :: (FluteNote -> Boolean) -> List FluteAccumulatorInfo -> Number -> List FluteNote -> List FluteAccumulatorInfo
 modFluteHistory f acc' time notes = go notes acc'
   where
@@ -1193,6 +1228,8 @@ bellNudgeF = 100.0 :: Number
 env :: Env -> RenderInfo
 env e =
   let
+    curBackgroundNote = backgroundNoteAt e.time
+
     bellRadius = (min e.canvas.w e.canvas.h) / 15.0
 
     bellPadding = 15.0
@@ -1233,7 +1270,8 @@ env e =
 
     bvCoords = backgroundVideoCoords e.canvas.w e.canvas.h e.time
 
-    isBackgroundVideoTocuhed = if e.time < touchableStarts then const false else isRectangleTouched (map snd touches) <<< bvCoords
+    -- memoize for cross-accessing
+    isBackgroundVideoTocuhed = if e.time < touchableStarts then const false else (functionize <<< memoize) (isRectangleTouched (map snd touches) <<< bvCoords)
 
     -- ____________________ = spy "ibv0" (map snd e.interactions)
     backgroundEvents =
@@ -1241,12 +1279,15 @@ env e =
         let
           prevEvents = functionize e.accumulator.backgroundEvents v
 
-          isTouched = isBackgroundVideoTocuhed v
+          isTouched =
+            firstPred
+              isBackgroundVideoTocuhed
+              (buddies e.accumulator.curBackgroundNote v)
 
           maxT = maybe 0.0 _.onset (L.head prevEvents)
 
           rv
-            | isTouched =
+            | isTouched {-|| e.accumulator.curBackgroundNote /= curBackgroundNote-} =
               { onset: e.time
               , interruptedAt: Nothing
               , note: backgroundNoteAt e.time
@@ -1361,6 +1402,7 @@ env e =
         (fold $ map _.a backgroundRenderingInfo)
           <> L.catMaybes (map _.a synthRenderingInfo)
           <> bellsToAudio bells e.time
+          <> (if e.time >= soloVideoStarts then (pure (gain_' "soloGain" 1.0 (playBufWithOffset_ "soloBuf" "solo" 1.0 3.8))) else Nil)
           <> ( case fluteHistoryToAudioUnit fluteHistory e.time of
                 Just x -> pure x
                 Nothing -> Nil
@@ -1384,6 +1426,7 @@ env e =
         , bells
         , bellsLoop
         , fluteHistory
+        , curBackgroundNote
         , prevClicks:
             e.accumulator.prevClicks
               `union`
@@ -1534,19 +1577,20 @@ main =
           , fluteHistory: Nil
           , bellsLoop: bellsAsCycle
           , prevClicks: S.empty
+          , curBackgroundNote: Nt0
           }
     , exporter = defaultExporter
     , webcamCache = \_ _ -> identity
     , buffers =
       makeBuffersKeepingCache 20
-        ( [ Tuple "bell" "https://freesound.org/data/previews/439/439616_737466-hq.mp3", Tuple "backgroundWind" "https://freesound.org/data/previews/244/244942_263745-lq.mp3" ]
+        ( [ Tuple "bell" "https://freesound.org/data/previews/439/439616_737466-hq.mp3", Tuple "backgroundWind" "https://freesound.org/data/previews/244/244942_263745-lq.mp3", Tuple "solo" "https://klank-share.s3-eu-west-1.amazonaws.com/wwia/real/solo.ogg" ]
             <> (A.fromFoldable <<< join)
                 ( map
                     ( \v ->
                         map
                           ( \n ->
                               let
-                                name' = show (voiceToIdx v) <> "." <> show (markerToIdx n `mod` 2) <> ".eq.ogg" {-(markerToIdx n)-}
+                                name' = show (voiceToIdx v) <> "." <> show (markerToIdx n) <> ".eq.ogg"
 
                                 name = show v <> show n
                               in
@@ -1647,6 +1691,8 @@ data BackgroundNote
   | Nt11 -- sky. And everyone who sees us :: Ev 'Ry One
   | Nt12 -- greets us as we fly. :: As We Fly
   | Nt13 -- [end]
+
+derive instance backgroundNoteEq :: Eq BackgroundNote
 
 derive instance backgroundNoteGeneric :: Generic BackgroundNote _
 
