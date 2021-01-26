@@ -1043,6 +1043,26 @@ bellsToAudio l time = go l Nil
           Just x -> playBuf_ ("bell" <> show x <> show a.pitch) "bell" (midiToMult a.pitch) : acc
       )
 
+defaultBend :: Number -> Number -> Number
+defaultBend onset time = bindBetween 0.96 1.0 $ calcSlope 0.96 onset 1.0 (onset + 0.5) time
+
+bendit :: BackgroundNote -> Number -> Number -> Number
+bendit note onset time = case note of
+  Nt0 -> defaultBend onset time
+  Nt1 -> defaultBend onset time
+  Nt2 -> defaultBend onset time
+  Nt3 -> defaultBend onset time
+  Nt4 -> defaultBend onset time
+  Nt5 -> defaultBend onset time
+  Nt6 -> 1.0
+  Nt7 -> 1.0
+  Nt8 -> 1.0
+  Nt9 -> 1.0
+  Nt10 -> defaultBend onset time
+  Nt11 -> defaultBend onset time
+  Nt12 -> defaultBend onset time
+  Nt13 -> defaultBend onset time
+
 backgroundEventsToAudio :: BackgroundVoice -> Number -> List BackgroundEventInfo -> List AudioUnitD2
 backgroundEventsToAudio v time l = go l
   where
@@ -1053,12 +1073,14 @@ backgroundEventsToAudio v time l = go l
         gmult
           | time < singingStarts = 0.0
           | time < firstVerseStarts = calcSlope singingStarts 0.0 firstVerseStarts 1.0 time
+          | rbd <- onset + (2.0 * beat)
+          , time < rbd = bindBetween 0.6 1.0 $ calcSlope onset 0.6 rbd 1.0 time
           | otherwise = 1.0
       in
         ( gain_' (show onset <> show v <> show note <> "gain") (gmult * (maybe 1.0 (\x -> bindBetween 0.0 1.0 $ calcSlope x 1.0 (x + 0.4) 0.0 time) interruptedAt))
             ( playBufT_ (show onset <> show v <> show note <> "buf") (show v <> show note)
                 defaultParam
-                  { param = 1.0
+                  { param = bendit note onset time
                   , timeOffset = if time < onset then onset - time else 0.0
                   }
             )
