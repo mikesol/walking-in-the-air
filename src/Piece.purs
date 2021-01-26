@@ -40,7 +40,7 @@ import FRP.Event (Event, makeEvent, subscribe)
 import Graphics.Canvas (Rectangle)
 import Graphics.Drawing (Color, Font, Point)
 import Graphics.Drawing.Font (bold, font, sansSerif)
-import Graphics.Painting (Gradient(..), ImageSource(..), MeasurableText, Painting, FillStyle, circle, drawImageFull, fillColor, fillGradient, filled, rectangle, rotate, scale, text, textMeasurableText, translate)
+import Graphics.Painting (Gradient(..), ImageSource(..), MeasurableText, Painting, FillStyle, circle, drawImageFull, fillColor, fillGradient, filled, rectangle, text, textMeasurableText)
 import Klank.Dev.Util (makeBuffersKeepingCache, makeImagesKeepingCache)
 import Math (cos, pi, pow, sin, (%))
 import Type.Klank.Dev (Klank', defaultEngineInfo, klank)
@@ -56,6 +56,10 @@ import Web.TouchEvent.TouchEvent as TE
 import Web.TouchEvent.TouchList as TL
 import Web.UIEvent.MouseEvent (MouseEvent)
 import Web.UIEvent.MouseEvent as ME
+
+-- 32 seconds load time with rich images
+-- 10 seconds load time without rich images
+useRichImages = false :: Boolean
 
 fluteNoteToRGB :: FluteNote -> RGB
 fluteNoteToRGB fn = case fn of
@@ -944,10 +948,7 @@ soloVideo bvCoords time =
 
     resizeInfo = resizeVideo videoWidth videoHeight videoCoords.width videoCoords.height
 
-    img = FromImage { name: if leadingCoord >= 14 then "wwia." <> show (floor ((toNumber (min 20 leadingCoord)) * 2.0 * measure * fps) + trailingCoord) else show leadingCoord <> "." <> show trailingCoord <> ".mosaic" }
-
-    --img = FromImage { name: "wwia.1676" }
-    out = drawImageFull img (resizeInfo.x + if leadingCoord >= 14 then 0.0 else (voiceToWidth Solo)) (resizeInfo.y + if leadingCoord >= 14 then 0.0 else (voiceToHeight Solo)) resizeInfo.sWidth resizeInfo.sHeight videoCoords.x videoCoords.y videoCoords.width videoCoords.height <> bkg
+    out = if not useRichImages then filled (fillColor $ rgb 55 123 97) (rectangle videoCoords.x videoCoords.y videoCoords.width videoCoords.height) else let img = FromImage { name: if leadingCoord >= 14 then "wwia." <> show (floor ((toNumber (min 20 leadingCoord)) * 2.0 * measure * fps) + trailingCoord) else show leadingCoord <> "." <> show trailingCoord <> ".mosaic" } in drawImageFull img (resizeInfo.x + if leadingCoord >= 14 then 0.0 else (voiceToWidth Solo)) (resizeInfo.y + if leadingCoord >= 14 then 0.0 else (voiceToHeight Solo)) resizeInfo.sWidth resizeInfo.sHeight videoCoords.x videoCoords.y videoCoords.width videoCoords.height <> bkg
   in
     out
 
@@ -966,9 +967,7 @@ backgroundEventsToVideo v bvCoords (a : _) time =
 
     resizeInfo = resizeVideo videoWidth videoHeight videoCoords.width videoCoords.height
 
-    img = FromImage { name: timeToBackgroundFrame currentEvent.note (time - currentEvent.onset) }
-
-    out = drawImageFull img (resizeInfo.x + (voiceToWidth v)) (resizeInfo.y + (voiceToHeight v)) resizeInfo.sWidth resizeInfo.sHeight videoCoords.x videoCoords.y videoCoords.width videoCoords.height
+    out = if not useRichImages then filled (fillColor $ rgb 55 (55 + (floor (3.0 * (time - currentEvent.onset)) `mod` 255)) 55) (rectangle videoCoords.x videoCoords.y videoCoords.width videoCoords.height) else let img = FromImage { name: timeToBackgroundFrame currentEvent.note (time - currentEvent.onset) } in drawImageFull img (resizeInfo.x + (voiceToWidth v)) (resizeInfo.y + (voiceToHeight v)) resizeInfo.sWidth resizeInfo.sHeight videoCoords.x videoCoords.y videoCoords.width videoCoords.height
   in
     out
 
@@ -1558,7 +1557,7 @@ main =
                     backgroundVoices
                 )
         )
-    , images = makeImagesKeepingCache 20 (map (\i -> (Tuple ("wwia." <> show i) ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/real/solo/wwia." <> show i <> ".jpg"))) (A.range (14 * (floor $ 2.0 * measure * fps)) (21 * (floor $ 2.0 * measure * fps) - 1)) <> join (map (\bn -> map (\i -> let name = asMosaicString bn i in Tuple name ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/real/background2Portrait/" <> name <> ".jpg")) (A.range 0 (framesInSection - 1))) (A.fromFoldable backgroundNotes)))
+    , images = makeImagesKeepingCache 20 (if not useRichImages then [] else (map (\i -> (Tuple ("wwia." <> show i) ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/real/solo/wwia." <> show i <> ".jpg"))) (A.range (14 * (floor $ 2.0 * measure * fps)) (21 * (floor $ 2.0 * measure * fps) - 1)) <> join (map (\bn -> map (\i -> let name = asMosaicString bn i in Tuple name ("https://klank-share.s3-eu-west-1.amazonaws.com/wwia/real/background2Portrait/" <> name <> ".jpg")) (A.range 0 (framesInSection - 1))) (A.fromFoldable backgroundNotes))))
     --, images =
     --  makePooledImagesFromCanvasesKeepingCache 20
     --    { videos: [ Tuple "vid" "https://klank-share.s3-eu-west-1.amazonaws.com/wwia/fake/tvcropxLong20fps.mp4" ]
